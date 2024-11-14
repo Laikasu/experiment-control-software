@@ -15,6 +15,7 @@ def main():
         w.show()
 
         app.exec()
+        del(w) # Ensures cleanup while ic4 is still active
 
 if __name__ == "__main__":
     main()

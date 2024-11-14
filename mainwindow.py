@@ -2,14 +2,12 @@
 from threading import Lock
 
 from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, QCoreApplication
-from PySide6.QtGui import QAction, QKeySequence, QCloseEvent
+from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
 import sys, os
 import cv2
 
 import imagingcontrol4 as ic4
-
-from resourceselector import ResourceSelector
 
 GOT_PHOTO_EVENT = QEvent.Type(QEvent.Type.User + 1)
 DEVICE_LOST_EVENT = QEvent.Type(QEvent.Type.User + 2)
@@ -21,15 +19,23 @@ class GotPhotoEvent(QEvent):
 
 class MainWindow(QMainWindow):
 
+    _application_path = None
+    def relative_path(self, relative_path):
+        if self._application_path is None:
+            self._application_path = os.path.abspath(os.path.dirname(sys.argv[0])) + os.sep
+        return self._application_path + relative_path
+
     def __init__(self):
         QMainWindow.__init__(self)
 
         # Make sure the %appdata%/demoapp directory exists
         appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
         QDir(appdata_directory).mkpath(".")
+        
 
-        self.save_pictures_directory = QStandardPaths.writableLocation(QStandardPaths.PicturesLocation)
-        self.save_videos_directory = QStandardPaths.writableLocation(QStandardPaths.MoviesLocation)
+        self.save_pictures_directory = self.relative_path("Data")
+        self.backgrounds_directory = self.relative_path("Backgrounds")
+        self.save_videos_directory = self.relative_path("Videos")
 
         self.device_file = appdata_directory + "/device.json"
         self.codec_config_file = appdata_directory + "/codecconfig.json"
@@ -42,6 +48,8 @@ class MainWindow(QMainWindow):
 
         self.grabber = ic4.Grabber()
         self.grabber.event_add_device_lost(lambda g: QApplication.postEvent(self, QEvent(DEVICE_LOST_EVENT)))
+
+        self.backgrounds = []
 
         class Listener(ic4.QueueSinkListener):
             def sink_connected(self, sink: ic4.QueueSink, image_type: ic4.ImageType, min_buffers_required: int) -> bool:
@@ -117,24 +125,22 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "", f"Loading last codec configuration failed: {e}", QMessageBox.StandardButton.Ok)
 
         self.updateControls()
+    
+    
 
     def createUI(self):
-        filepath = sys.argv[0]
-        pathname = os.path.dirname(filepath)
         self.resize(1024, 768)
-
-        selector = ResourceSelector()
 
         #=========#
         # Actions #
         #=========#
 
-        self.device_select_act = QAction(selector.loadIcon(pathname + "/images/camera.png"), "&Select", self)
+        self.device_select_act = QAction(QIcon(self.relative_path("images/camera.png")), "&Select", self)
         self.device_select_act.setStatusTip("Select a video capture device")
         self.device_select_act.setShortcut(QKeySequence.Open)
         self.device_select_act.triggered.connect(self.onSelectDevice)
 
-        self.device_properties_act = QAction(selector.loadIcon(pathname + "/images/imgset.png"), "&Properties", self)
+        self.device_properties_act = QAction(QIcon(self.relative_path("images/imgset.png")), "&Properties", self)
         self.device_properties_act.setStatusTip("Show device property dialog")
         self.device_properties_act.triggered.connect(self.onDeviceProperties)
 
@@ -142,35 +148,35 @@ class MainWindow(QMainWindow):
         self.device_driver_properties_act.setStatusTip("Show device driver property dialog")
         self.device_driver_properties_act.triggered.connect(self.onDeviceDriverProperties)
 
-        self.trigger_mode_act = QAction(selector.loadIcon(pathname + "/images/triggermode.png"), "&Trigger Mode", self)
+        self.trigger_mode_act = QAction(QIcon(self.relative_path("images/triggermode.png")), "&Trigger Mode", self)
         self.trigger_mode_act.setStatusTip("Enable and disable trigger mode")
         self.trigger_mode_act.setCheckable(True)
         self.trigger_mode_act.triggered.connect(self.onToggleTriggerMode)
 
-        self.start_live_act = QAction(selector.loadIcon(pathname + "/images/livestream.png"), "&Live Stream", self)
+        self.start_live_act = QAction(QIcon(self.relative_path("images/livestream.png")), "&Live Stream", self)
         self.start_live_act.setStatusTip("Start and stop the live stream")
         self.start_live_act.setCheckable(True)
         self.start_live_act.triggered.connect(self.startStopStream)
 
-        self.shoot_photo_act = QAction(selector.loadIcon(pathname + "/images/photo.png"), "&Shoot Photo", self)
+        self.shoot_photo_act = QAction(QIcon(self.relative_path("images/photo.png")), "&Shoot Photo", self)
         self.shoot_photo_act.setStatusTip("Shoot and save a photo")
         self.shoot_photo_act.triggered.connect(self.onShootPhoto)
 
-        self.record_start_act = QAction(selector.loadIcon(pathname + "/images/recordstart.png"), "&Capture Video", self)
+        self.record_start_act = QAction(QIcon(self.relative_path("images/recordstart.png")), "&Capture Video", self)
         self.record_start_act.setToolTip("Capture video into MP4 file")
         self.record_start_act.setCheckable(True)
         self.record_start_act.triggered.connect(self.onStartStopCaptureVideo)
 
-        self.record_pause_act = QAction(selector.loadIcon(pathname + "/images/recordpause.png"), "&Pause Capture Video", self)
+        self.record_pause_act = QAction(QIcon(self.relative_path("images/recordpause.png")), "&Pause Capture Video", self)
         self.record_pause_act.setStatusTip("Pause video capture")
         self.record_pause_act.setCheckable(True)
         self.record_pause_act.triggered.connect(self.onPauseCaptureVideo)
 
-        self.record_stop_act = QAction(selector.loadIcon(pathname + "/images/recordstop.png"), "&Stop Capture Video", self)
+        self.record_stop_act = QAction(QIcon(self.relative_path("images/recordstop.png")), "&Stop Capture Video", self)
         self.record_stop_act.setStatusTip("Stop video capture")
         self.record_stop_act.triggered.connect(self.onStopCaptureVideo)
 
-        self.codec_property_act = QAction(selector.loadIcon(pathname + "/images/gear.png"), "&Codec Properties", self)
+        self.codec_property_act = QAction(QIcon(self.relative_path("images/gear.png")), "&Codec Properties", self)
         self.codec_property_act.setStatusTip("Configure the video codec")
         self.codec_property_act.triggered.connect(self.onCodecProperties)
 
@@ -179,10 +185,13 @@ class MainWindow(QMainWindow):
         self.close_device_act.setShortcuts(QKeySequence.Close)
         self.close_device_act.triggered.connect(self.onCloseDevice)
 
-        self.backgrounds = []
-        self.select_backgrounds_act = QAction("Select Background", self)
+        self.select_backgrounds_act = QAction("Select &Backgrounds", self)
         self.select_backgrounds_act.setStatusTip("Select background images")
         self.select_backgrounds_act.triggered.connect(self.select_backgrounds)
+
+        self.save_background_act = QAction("&Save Background", self)
+        self.save_background_act.setStatusTip("Save background image")
+        self.save_background_act.triggered.connect(self.save_background)
 
 
 
@@ -214,6 +223,7 @@ class MainWindow(QMainWindow):
         capture_menu.addAction(self.record_stop_act)
         capture_menu.addAction(self.codec_property_act)
         capture_menu.addAction(self.select_backgrounds_act)
+        capture_menu.addAction(self.save_background_act)
 
 
         #=========#
@@ -235,6 +245,8 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.record_pause_act)
         toolbar.addAction(self.record_stop_act)
         toolbar.addAction(self.codec_property_act)
+        toolbar.addAction(self.save_background_act)
+        toolbar.addAction(self.select_backgrounds_act)
 
         self.video_widget = ic4.pyside6.DisplayWidget()
         self.video_widget.setMinimumSize(640, 480)
@@ -250,6 +262,7 @@ class MainWindow(QMainWindow):
         self.update_statistics_timer = QTimer()
         self.update_statistics_timer.timeout.connect(self.onUpdateStatisticsTimer)
         self.update_statistics_timer.start()
+        
 
     def onCloseDevice(self):
         if self.grabber.is_streaming:
@@ -376,6 +389,7 @@ class MainWindow(QMainWindow):
         self.record_pause_act.setChecked(self.video_capture_pause)
         self.record_start_act.setChecked(self.capture_to_video)
         self.close_device_act.setEnabled(self.grabber.is_device_open)
+        self.save_background_act.setEnabled(self.grabber.is_streaming)
 
         self.updateTriggerControl(None)
 
@@ -493,12 +507,14 @@ class MainWindow(QMainWindow):
         dialog.setNameFilters(filters)
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
-        dialog.setDirectory(self.save_pictures_directory)
+        dialog.setDirectory(self.backgrounds_directory)
 
         if dialog.exec():
             selected_filter = dialog.selectedNameFilter()
             full_path = dialog.selectedFiles()[0]
             self.backgrounds = [cv2.imread(image) for image in dialog.selectedFiles()]
-            self.save_pictures_directory = QFileInfo(full_path).absolutePath()
+            self.backgrounds_directory = QFileInfo(full_path).absolutePath()
 
-            
+    def save_background(self, image_buffer: ic4.ImageBuffer):
+        name = datetime.now().strftime("background_%m-%d_%H-%M-%S")
+        image_buffer.save_as_bmp(backgrounds_directory + os.sep + f"{name}")
