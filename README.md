@@ -1,8 +1,14 @@
-# ic4-demoapp - python
+# Live Monitoring software
 
-Complex Python3 application, identical to the C++ ic4-demoapp in this repository.
+This is a live monitoring software for use in my experment. It is written in Python and uses PySide6 UI.
 
-# Setup
+# Requirements
 
+This software requires a GenTL producer to connect to a camera.
+This can be found on the website of the imaging source.
+
+https://www.theimagingsource.com/en-us/support/download/
+
+The dependent python modules are found in the requirements text file.
+The imagingcontrol4 modules are only found on the PyPI repository (not conda or eg. apt), so using pip (and a venv) is recommended.
 pip install -r ./requirements.txt
-python3 ./demoapp.py
