@@ -4,7 +4,7 @@ from threading import Lock
 from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, QCoreApplication
 from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
-import sys, os
+import os
 import cv2
 
 import imagingcontrol4 as ic4
@@ -22,7 +22,7 @@ class MainWindow(QMainWindow):
     _application_path = None
     def relative_path(self, relative_path):
         if self._application_path is None:
-            self._application_path = os.path.abspath(os.path.dirname(sys.argv[0])) + os.sep
+            self._application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
         return self._application_path + relative_path
 
     def __init__(self):
@@ -30,12 +30,17 @@ class MainWindow(QMainWindow):
 
         # Make sure the %appdata%/demoapp directory exists
         appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
+        picture_directory = QStandardPaths.writableLocation(QStandardPaths.PicturesLocation)
+        video_directory = QStandardPaths.writableLocation(QStandardPaths.MoviesLocation)
+        print(picture_directory, video_directory)
         QDir(appdata_directory).mkpath(".")
         
 
-        self.save_pictures_directory = self.relative_path("Data")
-        self.backgrounds_directory = self.relative_path("Backgrounds")
-        self.save_videos_directory = self.relative_path("Videos")
+        self.data_directory = picture_directory + "/Data"
+        QDir(self.data_directory).mkpath(".")
+        self.backgrounds_directory = picture_directory + "/Backgrounds"
+        QDir(self.backgrounds_directory).mkpath(".")
+        self.save_videos_directory = video_directory
 
         self.device_file = appdata_directory + "/device.json"
         self.codec_config_file = appdata_directory + "/codecconfig.json"
@@ -134,13 +139,14 @@ class MainWindow(QMainWindow):
         #=========#
         # Actions #
         #=========#
-
-        self.device_select_act = QAction(QIcon(self.relative_path("images/camera.png")), "&Select", self)
+        application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
+        
+        self.device_select_act = QAction(QIcon(application_path + "images/camera.png"), "&Select", self)
         self.device_select_act.setStatusTip("Select a video capture device")
         self.device_select_act.setShortcut(QKeySequence.Open)
         self.device_select_act.triggered.connect(self.onSelectDevice)
 
-        self.device_properties_act = QAction(QIcon(self.relative_path("images/imgset.png")), "&Properties", self)
+        self.device_properties_act = QAction(QIcon(application_path + "images/imgset.png"), "&Properties", self)
         self.device_properties_act.setStatusTip("Show device property dialog")
         self.device_properties_act.triggered.connect(self.onDeviceProperties)
 
@@ -148,35 +154,35 @@ class MainWindow(QMainWindow):
         self.device_driver_properties_act.setStatusTip("Show device driver property dialog")
         self.device_driver_properties_act.triggered.connect(self.onDeviceDriverProperties)
 
-        self.trigger_mode_act = QAction(QIcon(self.relative_path("images/triggermode.png")), "&Trigger Mode", self)
+        self.trigger_mode_act = QAction(QIcon(application_path + "images/triggermode.png"), "&Trigger Mode", self)
         self.trigger_mode_act.setStatusTip("Enable and disable trigger mode")
         self.trigger_mode_act.setCheckable(True)
         self.trigger_mode_act.triggered.connect(self.onToggleTriggerMode)
 
-        self.start_live_act = QAction(QIcon(self.relative_path("images/livestream.png")), "&Live Stream", self)
+        self.start_live_act = QAction(QIcon(application_path + "images/livestream.png"), "&Live Stream", self)
         self.start_live_act.setStatusTip("Start and stop the live stream")
         self.start_live_act.setCheckable(True)
         self.start_live_act.triggered.connect(self.startStopStream)
 
-        self.shoot_photo_act = QAction(QIcon(self.relative_path("images/photo.png")), "&Shoot Photo", self)
+        self.shoot_photo_act = QAction(QIcon(application_path + "images/photo.png"), "&Shoot Photo", self)
         self.shoot_photo_act.setStatusTip("Shoot and save a photo")
         self.shoot_photo_act.triggered.connect(self.onShootPhoto)
 
-        self.record_start_act = QAction(QIcon(self.relative_path("images/recordstart.png")), "&Capture Video", self)
+        self.record_start_act = QAction(QIcon(application_path + "images/recordstart.png"), "&Capture Video", self)
         self.record_start_act.setToolTip("Capture video into MP4 file")
         self.record_start_act.setCheckable(True)
         self.record_start_act.triggered.connect(self.onStartStopCaptureVideo)
 
-        self.record_pause_act = QAction(QIcon(self.relative_path("images/recordpause.png")), "&Pause Capture Video", self)
+        self.record_pause_act = QAction(QIcon(application_path + "images/recordpause.png"), "&Pause Capture Video", self)
         self.record_pause_act.setStatusTip("Pause video capture")
         self.record_pause_act.setCheckable(True)
         self.record_pause_act.triggered.connect(self.onPauseCaptureVideo)
 
-        self.record_stop_act = QAction(QIcon(self.relative_path("images/recordstop.png")), "&Stop Capture Video", self)
+        self.record_stop_act = QAction(QIcon(application_path + "images/recordstop.png"), "&Stop Capture Video", self)
         self.record_stop_act.setStatusTip("Stop video capture")
         self.record_stop_act.triggered.connect(self.onStopCaptureVideo)
 
-        self.codec_property_act = QAction(QIcon(self.relative_path("images/gear.png")), "&Codec Properties", self)
+        self.codec_property_act = QAction(QIcon(application_path + "images/gear.png"), "&Codec Properties", self)
         self.codec_property_act.setStatusTip("Configure the video codec")
         self.codec_property_act.triggered.connect(self.onCodecProperties)
 
@@ -475,13 +481,13 @@ class MainWindow(QMainWindow):
         dialog.setNameFilters(filters)
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setDirectory(self.save_pictures_directory)
+        dialog.setDirectory(self.data_directory)
 
         if dialog.exec():
             selected_filter = dialog.selectedNameFilter()
 
             full_path = dialog.selectedFiles()[0]
-            self.save_pictures_directory = QFileInfo(full_path).absolutePath()
+            self.data_directory = QFileInfo(full_path).absolutePath()
 
             try:
                 if selected_filter == filters[0]:
@@ -511,9 +517,9 @@ class MainWindow(QMainWindow):
 
         if dialog.exec():
             selected_filter = dialog.selectedNameFilter()
-            full_path = dialog.selectedFiles()[0]
+            #full_path = dialog.selectedFiles()[0]
             self.backgrounds = [cv2.imread(image) for image in dialog.selectedFiles()]
-            self.backgrounds_directory = QFileInfo(full_path).absolutePath()
+            #self.backgrounds_directory = QFileInfo(full_path).absolutePath()
 
     def save_background(self, image_buffer: ic4.ImageBuffer):
         name = datetime.now().strftime("background_%m-%d_%H-%M-%S")
