@@ -1,11 +1,13 @@
 
 from threading import Lock
 
-from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, QCoreApplication
+from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt
 from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
 import os
+import datetime
 import cv2
+
 
 import imagingcontrol4 as ic4
 
@@ -18,21 +20,15 @@ class GotPhotoEvent(QEvent):
         self.image_buffer = buffer
 
 class MainWindow(QMainWindow):
-
-    _application_path = None
-    def relative_path(self, relative_path):
-        if self._application_path is None:
-            self._application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
-        return self._application_path + relative_path
-
     def __init__(self):
+        application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
         QMainWindow.__init__(self)
+        self.setWindowIcon(QIcon(application_path + "/images/tis.ico"))
 
         # Make sure the %appdata%/demoapp directory exists
         appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
         picture_directory = QStandardPaths.writableLocation(QStandardPaths.PicturesLocation)
         video_directory = QStandardPaths.writableLocation(QStandardPaths.MoviesLocation)
-        print(picture_directory, video_directory)
         QDir(appdata_directory).mkpath(".")
         
 
@@ -69,7 +65,7 @@ class MainWindow(QMainWindow):
             def frames_queued(listener, sink: ic4.QueueSink):
                 buf = sink.pop_output_buffer()
 
-                buffer_wrap = buffer.numpy_wrap()
+                buffer_wrap = buf.numpy_wrap()
                 
                 cv2.putText(
                     buffer_wrap,
@@ -523,4 +519,4 @@ class MainWindow(QMainWindow):
 
     def save_background(self, image_buffer: ic4.ImageBuffer):
         name = datetime.now().strftime("background_%m-%d_%H-%M-%S")
-        image_buffer.save_as_bmp(backgrounds_directory + os.sep + f"{name}")
+        image_buffer.save_as_bmp(self.backgrounds_directory + os.sep + f"{name}")
