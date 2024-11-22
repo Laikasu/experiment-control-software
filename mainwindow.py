@@ -51,7 +51,7 @@ class MainWindow(QMainWindow):
         self.grabber.event_add_device_lost(lambda g: QApplication.postEvent(self, QEvent(DEVICE_LOST_EVENT)))
 
         self.backgrounds = []
-        self.substract_background = False
+        self.subtract_background = False
 
         class Listener(ic4.QueueSinkListener):
             def sink_connected(self, sink: ic4.QueueSink, image_type: ic4.ImageType, min_buffers_required: int) -> bool:
@@ -78,7 +78,7 @@ class MainWindow(QMainWindow):
                     thickness=2,
                 )
 
-                if (self.substract_background and len(self.backgrounds) > 0):
+                if (self.subtract_background and len(self.backgrounds) > 0):
                     cv2.subtract(buffer_wrap, np.min(self.backgrounds, axis=0), buffer_wrap)
 
                 # Connect the buffer's chunk data to the device's property map
@@ -196,10 +196,10 @@ class MainWindow(QMainWindow):
         self.save_background_act.setStatusTip("Save background image")
         self.save_background_act.triggered.connect(self.save_background)
 
-        self.toggle_background_subtraction_act = QAction("&Toggle background subtraction", self)
-        self.toggle_background_subtraction_act.setStatusTip("Toggle background subtraction")
-        self.toggle_background_subtraction_act.setCheckable(True)
-        self.toggle_background_subtraction_act.triggered.connect(self.toggle_background_subtraction)
+        self.background_subtraction_act = QAction("Background Subtraction", self)
+        self.background_subtraction_act.setStatusTip("Toggle background subtraction")
+        self.background_subtraction_act.setCheckable(True)
+        self.background_subtraction_act.triggered.connect(self.toggle_background_subtraction)
 
 
 
@@ -232,7 +232,7 @@ class MainWindow(QMainWindow):
         capture_menu.addAction(self.codec_property_act)
         capture_menu.addAction(self.select_backgrounds_act)
         capture_menu.addAction(self.save_background_act)
-        capture_menu.addAction(self.toggle_background_substraction_act)
+        capture_menu.addAction(self.background_subtraction_act)
 
 
         #=========#
@@ -256,7 +256,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.codec_property_act)
         toolbar.addAction(self.save_background_act)
         toolbar.addAction(self.select_backgrounds_act)
-        toolbar.addAction(self.toggle_background_substraction_act)
+        toolbar.addAction(self.background_subtraction_act)
 
         self.video_widget = ic4.pyside6.DisplayWidget()
         self.video_widget.setMinimumSize(640, 480)
@@ -530,5 +530,5 @@ class MainWindow(QMainWindow):
         image_buffer.save_as_bmp(self.backgrounds_directory + os.sep + f"{name}")
 
     def toggle_background_subtraction(self):
-        self.substract_background != self.substract_background
-        self.toggle_background_subtraction_act.setChecked(self.substract_background)
+        self.subtract_background != self.subtract_background
+        self.background_subtraction_act.setChecked(self.subtract_background)
