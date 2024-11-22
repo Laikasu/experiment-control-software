@@ -5,9 +5,9 @@ from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt
 from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
 import os
-import datetime
+from datetime import datetime
 import cv2
-
+import numpy as np
 
 import imagingcontrol4 as ic4
 
@@ -43,6 +43,7 @@ class MainWindow(QMainWindow):
 
         self.shoot_photo_mutex = Lock()
         self.shoot_photo = False
+        self.shoot_bg = False
 
         self.capture_to_video = False
         self.video_capture_pause = False
@@ -78,8 +79,11 @@ class MainWindow(QMainWindow):
                     thickness=2,
                 )
 
-                if (self.subtract_background and len(self.backgrounds) > 0):
-                    cv2.subtract(buffer_wrap, np.min(self.backgrounds, axis=0), buffer_wrap)
+                if (self.subtract_background):
+                    if (len(self.backgrounds) == 1):
+                        cv2.subtract(buffer_wrap, self.backgrounds[0], buffer_wrap)
+                    elif (len(self.backgrounds) > 1):
+                        cv2.subtract(buffer_wrap, np.min(self.backgrounds, axis=0), buffer_wrap)
 
                 # Connect the buffer's chunk data to the device's property map
                 # This allows for properties backed by chunk data to be updated
@@ -194,11 +198,11 @@ class MainWindow(QMainWindow):
 
         self.save_background_act = QAction("&Save Background", self)
         self.save_background_act.setStatusTip("Save background image")
-        self.save_background_act.triggered.connect(self.save_background)
+        self.save_background_act.triggered.connect(self.onShootBG)
 
         self.background_subtraction_act = QAction("Background Subtraction", self)
         self.background_subtraction_act.setStatusTip("Toggle background subtraction")
-        self.background_subtraction_act.setCheckable(True)
+        #self.background_subtraction_act.setCheckable(True)
         self.background_subtraction_act.triggered.connect(self.toggle_background_subtraction)
 
 
@@ -294,12 +298,17 @@ class MainWindow(QMainWindow):
 
         if self.grabber.is_device_valid:
             self.grabber.device_save_state_to_file(self.device_file)
-
+    
     def customEvent(self, ev: QEvent):
         if ev.type() == DEVICE_LOST_EVENT:
             self.onDeviceLost()
         elif ev.type() == GOT_PHOTO_EVENT:
-            self.savePhoto(ev.image_buffer)
+            if (self.shoot_bg):
+                self.save_background(ev.image_buffer)
+                self.shoot_bg = False
+            else:
+                self.savePhoto(ev.image_buffer)
+            
 
     def onSelectDevice(self):
         dlg = ic4.pyside6.DeviceSelectionDialog(self.grabber, parent=self)
@@ -334,6 +343,11 @@ class MainWindow(QMainWindow):
     def onShootPhoto(self):
         with self.shoot_photo_mutex:
             self.shoot_photo = True
+    
+    def onShootBG(self):
+        with self.shoot_photo_mutex:
+            self.shoot_photo = True
+            self.shoot_bg = True
 
     def onUpdateStatisticsTimer(self):
         if not self.grabber.is_device_valid:
@@ -520,15 +534,15 @@ class MainWindow(QMainWindow):
         dialog.setDirectory(self.backgrounds_directory)
 
         if dialog.exec():
-            selected_filter = dialog.selectedNameFilter()
+            #selected_filter = dialog.selectedNameFilter()
             #full_path = dialog.selectedFiles()[0]
-            self.backgrounds = [cv2.imread(image) for image in dialog.selectedFiles()]
+            self.backgrounds = [cv2.imread(image, 0) for image in dialog.selectedFiles()]
             #self.backgrounds_directory = QFileInfo(full_path).absolutePath()
 
     def save_background(self, image_buffer: ic4.ImageBuffer):
         name = datetime.now().strftime("background_%m-%d_%H-%M-%S")
-        image_buffer.save_as_bmp(self.backgrounds_directory + os.sep + f"{name}")
+        image_buffer.save_as_bmp(self.backgrounds_directory + os.sep + f"{name}.bmp")
 
     def toggle_background_subtraction(self):
-        self.subtract_background != self.subtract_background
+        self.subtract_background = not self.subtract_background
         self.background_subtraction_act.setChecked(self.subtract_background)
