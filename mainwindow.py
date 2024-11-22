@@ -73,7 +73,7 @@ class MainWindow(QMainWindow):
                     (100, 100),
                     fontFace=cv2.FONT_HERSHEY_SIMPLEX,
                     fontScale=1,
-                    color=(255, 0, 0),
+                    color=(255, 255, 255),
                     thickness=2,
                 )
 
