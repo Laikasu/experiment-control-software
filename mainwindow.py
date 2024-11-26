@@ -555,7 +555,7 @@ class MainWindow(QMainWindow):
 
             # Averaging algorithm
             if (len(backgrounds) > 1):
-                weights = difference_weighted_average(backgrounds)
+                weights = self.difference_weighted_average(backgrounds)
                 background = np.average(backgrounds, axis=0, weights=weights)
             elif (len(backgrounds) == 0):
                 background = backgrounds[0]
