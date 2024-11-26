@@ -536,7 +536,23 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             #selected_filter = dialog.selectedNameFilter()
             #full_path = dialog.selectedFiles()[0]
-            self.backgrounds = [cv2.imread(image, 0) for image in dialog.selectedFiles()]
+            backgrounds = [cv2.imread(image, 0) for image in dialog.selectedFiles()]
+
+            # Averaging algorithm
+            background = np.zeros_like(backgrounds[0], dtype=np.uint64)
+            count = np.zeros_like(backgrounds[0], dtype=np.uint8)
+            for b1, b2 in combinations(backgrounds, 2):
+                diff = cv2.absdiff(b1, b2)/255
+                thresh = (diff < 0.1)
+                background[thresh] += cv2.addWeighted(b1, 0.5, b2, 0.5, 0)[thresh]
+                plt.imshow(background, cmap='gray')
+                plt.show()
+                count[thresh] += thresh[thresh].astype(np.uint8)
+            
+            
+            background[count != 0] /= count[count != 0]
+            self.background = background.astype(backgrounds[0].dtype)
+
             #self.backgrounds_directory = QFileInfo(full_path).absolutePath()
 
     def save_background(self, image_buffer: ic4.ImageBuffer):
