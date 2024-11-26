@@ -192,9 +192,9 @@ class MainWindow(QMainWindow):
         self.close_device_act.setShortcuts(QKeySequence.Close)
         self.close_device_act.triggered.connect(self.onCloseDevice)
 
-        self.select_backgrounds_act = QAction("Select &Backgrounds", self)
-        self.select_backgrounds_act.setStatusTip("Select background images")
-        self.select_backgrounds_act.triggered.connect(self.select_backgrounds)
+        self.select_background_act = QAction("Select &Backgrounds", self)
+        self.select_background_act.setStatusTip("Select background images")
+        self.select_background_act.triggered.connect(self.select_background)
 
         self.save_background_act = QAction("&Save Background", self)
         self.save_background_act.setStatusTip("Save background image")
@@ -234,7 +234,7 @@ class MainWindow(QMainWindow):
         capture_menu.addAction(self.record_pause_act)
         capture_menu.addAction(self.record_stop_act)
         capture_menu.addAction(self.codec_property_act)
-        capture_menu.addAction(self.select_backgrounds_act)
+        capture_menu.addAction(self.select_background_act)
         capture_menu.addAction(self.save_background_act)
         capture_menu.addAction(self.background_subtraction_act)
 
@@ -259,7 +259,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.record_stop_act)
         toolbar.addAction(self.codec_property_act)
         toolbar.addAction(self.save_background_act)
-        toolbar.addAction(self.select_backgrounds_act)
+        toolbar.addAction(self.select_background_act)
         toolbar.addAction(self.background_subtraction_act)
 
         self.video_widget = ic4.pyside6.DisplayWidget()
@@ -519,7 +519,24 @@ class MainWindow(QMainWindow):
             except ic4.IC4Exception as e:
                 QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
     
-    def select_backgrounds(self):
+    def difference_weighted_average(backgrounds):
+        # Averaging algorithm
+        output_weights = np.zeros_like(backgrounds, dtype=np.float64)
+
+        for i in range(len(backgrounds)):
+            for j in range(len(backgrounds)):
+                if (i < j):
+                    diff = np.abs(np.subtract(backgrounds[i], backgrounds[j]))
+                    # Threshold
+                    weight = np.where(diff < 0.01*255, 1, 0.01)
+                    output_weights[i] += weight
+                    output_weights[j] += weight
+                    #plt.imshow(weight, cmap='gray')
+                    #plt.show()
+
+        return output_weights
+    
+    def select_background(self):
         filters = [
             "Bitmap(*.bmp)",
             "JPEG (*.jpg)",
@@ -529,7 +546,7 @@ class MainWindow(QMainWindow):
         
         dialog = QFileDialog(self, "Select Backgrounds")
         dialog.setNameFilters(filters)
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
         dialog.setDirectory(self.backgrounds_directory)
 
@@ -539,18 +556,13 @@ class MainWindow(QMainWindow):
             backgrounds = [cv2.imread(image, 0) for image in dialog.selectedFiles()]
 
             # Averaging algorithm
-            background = np.zeros_like(backgrounds[0], dtype=np.uint64)
-            count = np.zeros_like(backgrounds[0], dtype=np.uint8)
-            for b1, b2 in combinations(backgrounds, 2):
-                diff = cv2.absdiff(b1, b2)/255
-                thresh = (diff < 0.1)
-                background[thresh] += cv2.addWeighted(b1, 0.5, b2, 0.5, 0)[thresh]
-                plt.imshow(background, cmap='gray')
-                plt.show()
-                count[thresh] += thresh[thresh].astype(np.uint8)
-            
-            
-            background[count != 0] /= count[count != 0]
+            if (len(backgrounds) > 1):
+                weights = difference_weighted_average(backgrounds)
+                background = np.average(backgrounds, axis=0, weights=weights)
+            elif (len(backgrounds) == 0):
+                background = backgrounds[0]
+            else:
+                return 0
             self.background = background.astype(backgrounds[0].dtype)
 
             #self.backgrounds_directory = QFileInfo(full_path).absolutePath()
