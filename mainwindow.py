@@ -522,17 +522,15 @@ class MainWindow(QMainWindow):
     def difference_weighted_average(backgrounds):
         # Averaging algorithm
         output_weights = np.zeros_like(backgrounds, dtype=np.float64)
-
         for i in range(len(backgrounds)):
             for j in range(len(backgrounds)):
                 if (i < j):
-                    diff = np.abs(np.subtract(backgrounds[i], backgrounds[j]))
-                    # Threshold
-                    weight = np.where(diff < 0.01*255, 1, 0.01)
+                    diff = np.abs(np.subtract(backgrounds[i], backgrounds[j], dtype=np.int16))
+                    weight = 0.01 + np.where(diff < 10, 1, 0) + np.where(diff < 20, 0.5, 0)
                     output_weights[i] += weight
                     output_weights[j] += weight
-                    #plt.imshow(weight, cmap='gray')
-                    #plt.show()
+                    # plt.imshow(weight, cmap='gray')
+                    # plt.show()
 
         return output_weights
     
