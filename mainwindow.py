@@ -67,7 +67,7 @@ class MainWindow(QMainWindow):
 
             def frames_queued(listener, sink: ic4.QueueSink):
                 buf = sink.pop_output_buffer()
-                buffer_wrap = buf.numpy_wrap()
+                buffer_wrap = buf.numpy_copy()
 
                 with self.shoot_photo_mutex:
                     if self.shoot_photo:
@@ -103,24 +103,13 @@ class MainWindow(QMainWindow):
                 # Connect the buffer's chunk data to the device's property map
                 # This allows for properties backed by chunk data to be updated
                 self.device_property_map.connect_chunkdata(buf)
-                self.display.display_buffer(buf)
+                height, width, channels = np.shape(buffer_wrap)
+                image = QImage(buffer_wrap.data, width, height, channels*width, QImage.Format_Grayscale8)
+
+                self.video_widget.setPixmap(QPixmap.fromImage(image))
         
-        class DisplayListener(ic4.QueueSinkListener):
-            def sink_connected(self, sink: ic4.QueueSink, image_type: ic4.ImageType, min_buffers_required: int) -> bool:
-                # Allocate more buffers than suggested, because we temporarily take some buffers
-                # out of circulation when saving an image or video files.
-                sink.alloc_and_queue_buffers(min_buffers_required)
-                return True
-
-            def sink_disconnected(self, sink: ic4.QueueSink):
-                pass
-
-            def frames_queued(listener, sink: ic4.QueueSink):
-                buf = sink.pop_output_buffer()
-                self.device_property_map.connect_chunkdata(buf)
 
         self.sink = ic4.QueueSink(Listener())
-        self.sink2 = ic4.QueueSink(DisplayListener())
 
         self.property_dialog = None
 
@@ -128,11 +117,11 @@ class MainWindow(QMainWindow):
 
         self.createUI()
 
-        try:
-            self.display = self.video_widget.as_display()
-            self.display.set_render_position(ic4.DisplayRenderPosition.STRETCH_CENTER)
-        except Exception as e:
-            QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
+        # try:
+        #     self.display = self.video_widget.as_display()
+        #     self.display.set_render_position(ic4.DisplayRenderPosition.STRETCH_CENTER)
+        # except Exception as e:
+        #     QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
 
         if QFileInfo.exists(self.device_file):
             try:
@@ -279,7 +268,9 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.select_background_act)
         toolbar.addAction(self.background_subtraction_act)
 
-        self.video_widget = ic4.pyside6.DisplayWidget()
+        # self.video_widget = ic4.pyside6.DisplayWidget()
+        # self.video_widget.setMinimumSize(640, 480)
+        self.video_widget = QLabel("Video Display")
         self.video_widget.setMinimumSize(640, 480)
         self.setCentralWidget(self.video_widget)
 
