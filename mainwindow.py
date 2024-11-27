@@ -51,7 +51,7 @@ class MainWindow(QMainWindow):
         self.grabber = ic4.Grabber()
         self.grabber.event_add_device_lost(lambda g: QApplication.postEvent(self, QEvent(DEVICE_LOST_EVENT)))
 
-        self.backgrounds = []
+        self.background = None
         self.subtract_background = False
 
         class Listener(ic4.QueueSinkListener):
@@ -69,21 +69,12 @@ class MainWindow(QMainWindow):
 
                 buffer_wrap = buf.numpy_wrap()
                 
-                cv2.putText(
-                    buffer_wrap,
-                    "This image has been edited",
-                    (100, 100),
-                    fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-                    fontScale=1,
-                    color=(255, 255, 255),
-                    thickness=2,
-                )
+                
 
-                if (self.subtract_background):
-                    if (len(self.backgrounds) == 1):
-                        cv2.subtract(buffer_wrap, self.backgrounds[0], buffer_wrap)
-                    elif (len(self.backgrounds) > 1):
-                        cv2.subtract(buffer_wrap, np.min(self.backgrounds, axis=0), buffer_wrap)
+                if (self.subtract_background and self.background is not None):
+                    np.subtract(buffer_wrap.astype(np.uint16) + np.uint16(155), self.background[:,:,np.newaxis], dtype=np.int8, out=buffer_wrap)
+                    
+                    #cv2.subtract(buffer_wrap, self.background, buffer_wrap)
 
                 # Connect the buffer's chunk data to the device's property map
                 # This allows for properties backed by chunk data to be updated
@@ -519,7 +510,7 @@ class MainWindow(QMainWindow):
             except ic4.IC4Exception as e:
                 QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
     
-    def difference_weighted_average(backgrounds):
+    def difference_weighted_average(self, backgrounds):
         # Averaging algorithm
         output_weights = np.zeros_like(backgrounds, dtype=np.float64)
         for i in range(len(backgrounds)):
