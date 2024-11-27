@@ -8,6 +8,7 @@ import os
 from datetime import datetime
 import cv2
 import numpy as np
+import ctypes
 
 import imagingcontrol4 as ic4
 
@@ -66,25 +67,7 @@ class MainWindow(QMainWindow):
 
             def frames_queued(listener, sink: ic4.QueueSink):
                 buf = sink.pop_output_buffer()
-
                 buffer_wrap = buf.numpy_wrap()
-                print(np.shape(buffer_wrap))
-                
-
-                if (self.subtract_background and self.background is not None):
-                    diff = np.subtract(buffer_wrap[:,:,0], self.background, dtype=np.uint16)
-                    buffer_wrap[:,:,:] = 0
-                    buffer_wrap[:,:,0] = 255
-                    #dpos = np.where(diff>10, diff, 0).astype(np.uint8)
-                    #dneg = np.where(diff<-10, -diff, 0).astype(np.uint8)
-                    #np.copyto(buffer_wrap[:,:,0], dpos, where=(dpos != 0))
-                    #np.copyto(buffer_wrap[:,:,2], dneg, where=(dneg != 0))
-                    
-                    #cv2.subtract(buffer_wrap, self.background, buffer_wrap)
-
-                # Connect the buffer's chunk data to the device's property map
-                # This allows for properties backed by chunk data to be updated
-                self.device_property_map.connect_chunkdata(buf)
 
                 with self.shoot_photo_mutex:
                     if self.shoot_photo:
@@ -99,8 +82,45 @@ class MainWindow(QMainWindow):
                         self.video_writer.add_frame(buf)
                     except ic4.IC4Exception as ex:
                         pass
+                
+                if (self.subtract_background):
+                    if (self.background is not None):
+                        cv2.subtract(buffer_wrap, self.background, buffer_wrap)
+                        #diff = np.subtract(buffer_wrap, self.background, dtype=np.int16)
+                        #dpos = np.where(diff>10, diff.astype(np.uint8), 0)
+                        #dneg = np.where(diff<-10, (-diff).astype(np.uint8), 0)
+                        #np.add(dneg, dpos, buffer_wrap)
+                        #np.copyto(buffer_wrap, self.background)
+
+                        #buffer_wrap[np.abs(diff)>10] = 0
+                
+                    
+                    #np.copyto(buffer_wrap[:,:,0], dpos, where=(dpos != 0))
+                    #np.copyto(buffer_wrap[:,:,2], dneg, where=(dneg != 0))
+                    
+                    #cv2.subtract(buffer_wrap, self.background, buffer_wrap)
+
+                # Connect the buffer's chunk data to the device's property map
+                # This allows for properties backed by chunk data to be updated
+                self.device_property_map.connect_chunkdata(buf)
+                self.display.display_buffer(buf)
+        
+        class DisplayListener(ic4.QueueSinkListener):
+            def sink_connected(self, sink: ic4.QueueSink, image_type: ic4.ImageType, min_buffers_required: int) -> bool:
+                # Allocate more buffers than suggested, because we temporarily take some buffers
+                # out of circulation when saving an image or video files.
+                sink.alloc_and_queue_buffers(min_buffers_required)
+                return True
+
+            def sink_disconnected(self, sink: ic4.QueueSink):
+                pass
+
+            def frames_queued(listener, sink: ic4.QueueSink):
+                buf = sink.pop_output_buffer()
+                self.device_property_map.connect_chunkdata(buf)
 
         self.sink = ic4.QueueSink(Listener())
+        self.sink2 = ic4.QueueSink(DisplayListener())
 
         self.property_dialog = None
 
@@ -199,7 +219,7 @@ class MainWindow(QMainWindow):
 
         self.background_subtraction_act = QAction("Background Subtraction", self)
         self.background_subtraction_act.setStatusTip("Toggle background subtraction")
-        #self.background_subtraction_act.setCheckable(True)
+        self.background_subtraction_act.setCheckable(True)
         self.background_subtraction_act.triggered.connect(self.toggle_background_subtraction)
 
 
@@ -477,7 +497,7 @@ class MainWindow(QMainWindow):
                     if self.capture_to_video:
                         self.onStopCaptureVideo()
                 else:
-                    self.grabber.stream_setup(self.sink, self.display)
+                    self.grabber.stream_setup(self.sink)
 
         except ic4.IC4Exception as e:
             QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
@@ -558,7 +578,7 @@ class MainWindow(QMainWindow):
                 background = backgrounds[0]
             else:
                 return 0
-            self.background = background.astype(backgrounds[0].dtype)
+            self.background = background.astype(backgrounds[0].dtype)[:,:,np.newaxis]
 
             #self.backgrounds_directory = QFileInfo(full_path).absolutePath()
 
