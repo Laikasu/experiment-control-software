@@ -68,11 +68,17 @@ class MainWindow(QMainWindow):
                 buf = sink.pop_output_buffer()
 
                 buffer_wrap = buf.numpy_wrap()
-                
+                print(np.shape(buffer_wrap))
                 
 
                 if (self.subtract_background and self.background is not None):
-                    np.subtract(buffer_wrap.astype(np.uint16) + np.uint16(155), self.background[:,:,np.newaxis], dtype=np.int8, out=buffer_wrap)
+                    diff = np.subtract(buffer_wrap[:,:,0], self.background, dtype=np.uint16)
+                    buffer_wrap[:,:,:] = 0
+                    buffer_wrap[:,:,0] = 255
+                    #dpos = np.where(diff>10, diff, 0).astype(np.uint8)
+                    #dneg = np.where(diff<-10, -diff, 0).astype(np.uint8)
+                    #np.copyto(buffer_wrap[:,:,0], dpos, where=(dpos != 0))
+                    #np.copyto(buffer_wrap[:,:,2], dneg, where=(dneg != 0))
                     
                     #cv2.subtract(buffer_wrap, self.background, buffer_wrap)
 
