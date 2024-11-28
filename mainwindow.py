@@ -2,8 +2,8 @@
 from threading import Lock
 
 from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt
-from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon
-from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
+from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage, QPixmap
+from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
 import os
 from datetime import datetime
 import cv2
@@ -14,6 +14,46 @@ import imagingcontrol4 as ic4
 
 GOT_PHOTO_EVENT = QEvent.Type(QEvent.Type.User + 1)
 DEVICE_LOST_EVENT = QEvent.Type(QEvent.Type.User + 2)
+
+class ZoomableGraphicsView(QGraphicsView):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.zoom_factor = 1.25  # Zoom in/out factor
+        self.current_scale = 1.0  # Track the current scale
+
+    def wheelEvent(self, event):
+        """
+        Override the wheelEvent to zoom in or out.
+        """
+        if event.modifiers() & Qt.ControlModifier:  # Check if Ctrl is held
+            if event.angleDelta().y() > 0:  # Scroll up to zoom in
+                self.zoom_in()
+            else:  # Scroll down to zoom out
+                self.zoom_out()
+        else:
+            # Pass the event to the parent class for default behavior (e.g., scrolling)
+            super().wheelEvent(event)
+
+    def zoom_in(self):
+        """
+        Zoom in by scaling up.
+        """
+        self.scale(self.zoom_factor, self.zoom_factor)
+        self.current_scale *= self.zoom_factor
+
+    def zoom_out(self):
+        """
+        Zoom out by scaling down.
+        """
+        self.scale(1 / self.zoom_factor, 1 / self.zoom_factor)
+        self.current_scale /= self.zoom_factor
+
+    def reset_zoom(self):
+        """
+        Reset zoom to the original scale.
+        """
+        self.resetTransform()
+        self.current_scale = 1.0
 
 class GotPhotoEvent(QEvent):
     def __init__(self, buffer: ic4.ImageBuffer):
@@ -105,8 +145,7 @@ class MainWindow(QMainWindow):
                 self.device_property_map.connect_chunkdata(buf)
                 height, width, channels = np.shape(buffer_wrap)
                 image = QImage(buffer_wrap.data, width, height, channels*width, QImage.Format_Grayscale8)
-
-                self.video_widget.setPixmap(QPixmap.fromImage(image))
+                self.video.setPixmap(QPixmap.fromImage(image))
         
 
         self.sink = ic4.QueueSink(Listener())
@@ -270,9 +309,17 @@ class MainWindow(QMainWindow):
 
         # self.video_widget = ic4.pyside6.DisplayWidget()
         # self.video_widget.setMinimumSize(640, 480)
-        self.video_widget = QLabel("Video Display")
-        self.video_widget.setMinimumSize(640, 480)
-        self.setCentralWidget(self.video_widget)
+        self.video_scene = QGraphicsScene(self)
+        self.video_view = ZoomableGraphicsView(self)
+        self.video_view.setDragMode(QGraphicsView.ScrollHandDrag)
+        self.video_view.setScene(self.video_scene)
+        #self.video_view.setAlignment(Qt.AlignCenter)
+        self.video_view.setMinimumSize(640, 480)
+
+        self.setCentralWidget(self.video_view)
+        self.video = QGraphicsPixmapItem()
+        self.video_scene.addItem(self.video)
+        
 
         self.statusBar().showMessage("Ready")
         self.statistics_label = QLabel("", self.statusBar())
@@ -570,6 +617,7 @@ class MainWindow(QMainWindow):
             else:
                 return 0
             self.background = background.astype(backgrounds[0].dtype)[:,:,np.newaxis]
+            
 
             #self.backgrounds_directory = QFileInfo(full_path).absolutePath()
 
