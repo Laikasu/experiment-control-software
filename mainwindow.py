@@ -1,59 +1,20 @@
 
 from threading import Lock
 
-from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt
-from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage, QPixmap
-from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
+from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, Signal
+from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
+from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
+
 import os
 from datetime import datetime
 import cv2
 import numpy as np
-import ctypes
 
 import imagingcontrol4 as ic4
+from videoview import VideoView
 
 GOT_PHOTO_EVENT = QEvent.Type(QEvent.Type.User + 1)
 DEVICE_LOST_EVENT = QEvent.Type(QEvent.Type.User + 2)
-
-class ZoomableGraphicsView(QGraphicsView):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.zoom_factor = 1.25  # Zoom in/out factor
-        self.current_scale = 1.0  # Track the current scale
-
-    def wheelEvent(self, event):
-        """
-        Override the wheelEvent to zoom in or out.
-        """
-        if event.modifiers() & Qt.ControlModifier:  # Check if Ctrl is held
-            if event.angleDelta().y() > 0:  # Scroll up to zoom in
-                self.zoom_in()
-            else:  # Scroll down to zoom out
-                self.zoom_out()
-        else:
-            # Pass the event to the parent class for default behavior (e.g., scrolling)
-            super().wheelEvent(event)
-
-    def zoom_in(self):
-        """
-        Zoom in by scaling up.
-        """
-        self.scale(self.zoom_factor, self.zoom_factor)
-        self.current_scale *= self.zoom_factor
-
-    def zoom_out(self):
-        """
-        Zoom out by scaling down.
-        """
-        self.scale(1 / self.zoom_factor, 1 / self.zoom_factor)
-        self.current_scale /= self.zoom_factor
-
-    def reset_zoom(self):
-        """
-        Reset zoom to the original scale.
-        """
-        self.resetTransform()
-        self.current_scale = 1.0
 
 class GotPhotoEvent(QEvent):
     def __init__(self, buffer: ic4.ImageBuffer):
@@ -61,6 +22,7 @@ class GotPhotoEvent(QEvent):
         self.image_buffer = buffer
 
 class MainWindow(QMainWindow):
+    new_frame = Signal(QImage)
     def __init__(self):
         application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
         QMainWindow.__init__(self)
@@ -107,7 +69,6 @@ class MainWindow(QMainWindow):
 
             def frames_queued(listener, sink: ic4.QueueSink):
                 buf = sink.pop_output_buffer()
-                buffer_wrap = buf.numpy_copy()
 
                 with self.shoot_photo_mutex:
                     if self.shoot_photo:
@@ -123,7 +84,10 @@ class MainWindow(QMainWindow):
                     except ic4.IC4Exception as ex:
                         pass
                 
+                buffer_wrap = buf.numpy_copy()
+                self.update_frame(buffer_wrap)
                 if (self.subtract_background):
+                    
                     if (self.background is not None):
                         cv2.subtract(buffer_wrap, self.background, buffer_wrap)
                         #diff = np.subtract(buffer_wrap, self.background, dtype=np.int16)
@@ -143,9 +107,8 @@ class MainWindow(QMainWindow):
                 # Connect the buffer's chunk data to the device's property map
                 # This allows for properties backed by chunk data to be updated
                 self.device_property_map.connect_chunkdata(buf)
-                height, width, channels = np.shape(buffer_wrap)
-                image = QImage(buffer_wrap.data, width, height, channels*width, QImage.Format_Grayscale8)
-                self.video.setPixmap(QPixmap.fromImage(image))
+                #self.update_frame(buffer_wrap)
+
         
 
         self.sink = ic4.QueueSink(Listener())
@@ -307,18 +270,12 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.select_background_act)
         toolbar.addAction(self.background_subtraction_act)
 
-        # self.video_widget = ic4.pyside6.DisplayWidget()
-        # self.video_widget.setMinimumSize(640, 480)
-        self.video_scene = QGraphicsScene(self)
-        self.video_view = ZoomableGraphicsView(self)
-        self.video_view.setDragMode(QGraphicsView.ScrollHandDrag)
-        self.video_view.setScene(self.video_scene)
-        #self.video_view.setAlignment(Qt.AlignCenter)
-        self.video_view.setMinimumSize(640, 480)
+        self.video_view = VideoView(self)
+        self.new_frame.connect(self.update_pixmap)
 
         self.setCentralWidget(self.video_view)
-        self.video = QGraphicsPixmapItem()
-        self.video_scene.addItem(self.video)
+        #self.video = QGraphicsPixmapItem()
+        #self.video_scene.addItem(self.video)
         
 
         self.statusBar().showMessage("Ready")
@@ -617,9 +574,6 @@ class MainWindow(QMainWindow):
             else:
                 return 0
             self.background = background.astype(backgrounds[0].dtype)[:,:,np.newaxis]
-            height, width, channels = np.shape(self.background)
-            image = QImage(self.background.data, width, height, channels*width, QImage.Format_Grayscale8)
-            self.video.setPixmap(QPixmap.fromImage(image))
 
             #self.backgrounds_directory = QFileInfo(full_path).absolutePath()
 
@@ -630,3 +584,11 @@ class MainWindow(QMainWindow):
     def toggle_background_subtraction(self):
         self.subtract_background = not self.subtract_background
         self.background_subtraction_act.setChecked(self.subtract_background)
+    
+    def update_frame(self, frame):
+        height, width, channels = np.shape(frame)
+        image = QImage(frame.data, width, height, channels*width, QImage.Format_Grayscale8)
+        self.new_frame.emit(image)
+    
+    def update_pixmap(self, image : QImage):
+        self.video_view.update_image(image)
