@@ -92,6 +92,7 @@ class MainWindow(QMainWindow):
         self.grabber = ic4.Grabber()
         self.grabber.event_add_device_lost(lambda g: QApplication.postEvent(self, QEvent(DEVICE_LOST_EVENT)))
 
+        self.processing_mutex = Lock()
         self.background = None
         self.subtract_background = False
 
@@ -106,46 +107,59 @@ class MainWindow(QMainWindow):
                 pass
 
             def frames_queued(listener, sink: ic4.QueueSink):
+<<<<<<< HEAD
                 buf = sink.pop_output_buffer()
                 buffer_wrap = buf.numpy_copy()
+=======
+                with self.processing_mutex:
+                    buf = sink.pop_output_buffer()
+                    buffer_wrap = buf.numpy_wrap()
+>>>>>>> c2a1aedee50168fa0c4a1c814ef44a9e6aa796c0
 
-                with self.shoot_photo_mutex:
-                    if self.shoot_photo:
-                        self.shoot_photo = False
+                    with self.shoot_photo_mutex:
+                        if self.shoot_photo:
+                            self.shoot_photo = False
 
-                        # Send an event to the main thread with a reference to 
-                        # the main thread of our GUI. 
-                        QApplication.postEvent(self, GotPhotoEvent(buf))
+                            # Send an event to the main thread with a reference to 
+                            # the main thread of our GUI. 
+                            QApplication.postEvent(self, GotPhotoEvent(buf))
 
-                if self.capture_to_video and not self.video_capture_pause:
-                    try:
-                        self.video_writer.add_frame(buf)
-                    except ic4.IC4Exception as ex:
-                        pass
-                
-                if (self.subtract_background):
-                    if (self.background is not None):
-                        cv2.subtract(buffer_wrap, self.background, buffer_wrap)
-                        #diff = np.subtract(buffer_wrap, self.background, dtype=np.int16)
-                        #dpos = np.where(diff>10, diff.astype(np.uint8), 0)
-                        #dneg = np.where(diff<-10, (-diff).astype(np.uint8), 0)
-                        #np.add(dneg, dpos, buffer_wrap)
-                        #np.copyto(buffer_wrap, self.background)
-
-                        #buffer_wrap[np.abs(diff)>10] = 0
-                
+                    if self.capture_to_video and not self.video_capture_pause:
+                        try:
+                            self.video_writer.add_frame(buf)
+                        except ic4.IC4Exception as ex:
+                            pass
                     
-                    #np.copyto(buffer_wrap[:,:,0], dpos, where=(dpos != 0))
-                    #np.copyto(buffer_wrap[:,:,2], dneg, where=(dneg != 0))
-                    
-                    #cv2.subtract(buffer_wrap, self.background, buffer_wrap)
+                    if (self.subtract_background):
+                        if (self.background is not None):
+                            cv2.subtract(buffer_wrap, self.background, buffer_wrap)
+                            #diff = np.subtract(buffer_wrap, self.background, dtype=np.int16)
+                            #dpos = np.where(diff>10, diff.astype(np.uint8), 0)
+                            #dneg = np.where(diff<-10, (-diff).astype(np.uint8), 0)
+                            #np.add(dneg, dpos, buffer_wrap)
+                            #np.copyto(buffer_wrap, self.background)
 
+<<<<<<< HEAD
                 # Connect the buffer's chunk data to the device's property map
                 # This allows for properties backed by chunk data to be updated
                 self.device_property_map.connect_chunkdata(buf)
                 height, width, channels = np.shape(buffer_wrap)
                 image = QImage(buffer_wrap.data, width, height, channels*width, QImage.Format_Grayscale8)
                 self.video.setPixmap(QPixmap.fromImage(image))
+=======
+                            #buffer_wrap[np.abs(diff)>10] = 0
+                    
+                        
+                        #np.copyto(buffer_wrap[:,:,0], dpos, where=(dpos != 0))
+                        #np.copyto(buffer_wrap[:,:,2], dneg, where=(dneg != 0))
+                        
+                        #cv2.subtract(buffer_wrap, self.background, buffer_wrap)
+
+                    # Connect the buffer's chunk data to the device's property map
+                    # This allows for properties backed by chunk data to be updated
+                    self.device_property_map.connect_chunkdata(buf)
+                    self.display.display_buffer(buf)
+>>>>>>> c2a1aedee50168fa0c4a1c814ef44a9e6aa796c0
         
 
         self.sink = ic4.QueueSink(Listener())
