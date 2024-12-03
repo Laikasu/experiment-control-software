@@ -85,16 +85,24 @@ class MainWindow(QMainWindow):
                         pass
                 
                 buffer_wrap = buf.numpy_copy()
-                self.update_frame(buffer_wrap)
+                
                 if (self.subtract_background):
-                    
+                    #roi = self.video_view.mapToScene(self.video_view.viewport().rect()).boundingRect().getCoords()
                     if (self.background is not None):
-                        cv2.subtract(buffer_wrap, self.background, buffer_wrap)
-                        #diff = np.subtract(buffer_wrap, self.background, dtype=np.int16)
-                        #dpos = np.where(diff>10, diff.astype(np.uint8), 0)
-                        #dneg = np.where(diff<-10, (-diff).astype(np.uint8), 0)
-                        #np.add(dneg, dpos, buffer_wrap)
-                        #np.copyto(buffer_wrap, self.background)
+                        # Only subtract in visible area: increases performance a lot!
+                        bounds = np.array(self.video_view.mapToScene(self.video_view.viewport().rect()).boundingRect().getCoords(), dtype=np.int16)
+                        bounds[0] = max(bounds[0], 0)
+                        bounds[1] = max(bounds[1], 0)
+                        bounds[2] = min(bounds[2], sink.output_image_type.width - 1)
+                        bounds[3] = min(bounds[3], sink.output_image_type.height - 1)
+                        roi = np.index_exp[bounds[1]:bounds[3], bounds[0]:bounds[2]]
+                        #cv2.subtract(buffer_wrap, self.background, buffer_wrap)
+
+                        # (reference + signal) / reference
+                        diff = np.divide(np.subtract(buffer_wrap[roi], self.background[roi], dtype=np.int16), self.background[roi], dtype=np.float64)
+                        buffer_wrap[roi] = (diff*127 + 127).astype(np.uint8)
+                        
+                        #np.copyto(buffer_wrap, (diff*127 + 127).astype(np.uint8))
 
                         #buffer_wrap[np.abs(diff)>10] = 0
                 
@@ -103,7 +111,8 @@ class MainWindow(QMainWindow):
                     #np.copyto(buffer_wrap[:,:,2], dneg, where=(dneg != 0))
                     
                     #cv2.subtract(buffer_wrap, self.background, buffer_wrap)
-
+                
+                self.update_frame(buffer_wrap)
                 # Connect the buffer's chunk data to the device's property map
                 # This allows for properties backed by chunk data to be updated
                 self.device_property_map.connect_chunkdata(buf)
