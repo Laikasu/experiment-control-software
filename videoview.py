@@ -23,7 +23,7 @@ class VideoView(QGraphicsView):
         height, width, channels = np.shape(frame)
         if frame.dtype == np.uint16:
             self._current_frame.setPixmap(QPixmap.fromImage(QImage(frame.data, width, height, 2*channels*width, QImage.Format_Grayscale16)))
-        elif (frame.dtype =- np.uint8):
+        elif frame.dtype == np.uint8:
             self._current_frame.setPixmap(QPixmap.fromImage(QImage(frame.data, width, height, channels*width, QImage.Format_Grayscale8)))
         
 
