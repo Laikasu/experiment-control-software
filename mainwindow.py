@@ -8,52 +8,12 @@ import os
 from datetime import datetime
 import cv2
 import numpy as np
-import ctypes
 
 import imagingcontrol4 as ic4
 
 GOT_PHOTO_EVENT = QEvent.Type(QEvent.Type.User + 1)
 DEVICE_LOST_EVENT = QEvent.Type(QEvent.Type.User + 2)
 
-class ZoomableGraphicsView(QGraphicsView):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.zoom_factor = 1.25  # Zoom in/out factor
-        self.current_scale = 1.0  # Track the current scale
-
-    def wheelEvent(self, event):
-        """
-        Override the wheelEvent to zoom in or out.
-        """
-        if event.modifiers() & Qt.ControlModifier:  # Check if Ctrl is held
-            if event.angleDelta().y() > 0:  # Scroll up to zoom in
-                self.zoom_in()
-            else:  # Scroll down to zoom out
-                self.zoom_out()
-        else:
-            # Pass the event to the parent class for default behavior (e.g., scrolling)
-            super().wheelEvent(event)
-
-    def zoom_in(self):
-        """
-        Zoom in by scaling up.
-        """
-        self.scale(self.zoom_factor, self.zoom_factor)
-        self.current_scale *= self.zoom_factor
-
-    def zoom_out(self):
-        """
-        Zoom out by scaling down.
-        """
-        self.scale(1 / self.zoom_factor, 1 / self.zoom_factor)
-        self.current_scale /= self.zoom_factor
-
-    def reset_zoom(self):
-        """
-        Reset zoom to the original scale.
-        """
-        self.resetTransform()
-        self.current_scale = 1.0
 
 class GotPhotoEvent(QEvent):
     def __init__(self, buffer: ic4.ImageBuffer):
@@ -107,14 +67,9 @@ class MainWindow(QMainWindow):
                 pass
 
             def frames_queued(listener, sink: ic4.QueueSink):
-<<<<<<< HEAD
-                buf = sink.pop_output_buffer()
-                buffer_wrap = buf.numpy_copy()
-=======
                 with self.processing_mutex:
                     buf = sink.pop_output_buffer()
                     buffer_wrap = buf.numpy_wrap()
->>>>>>> c2a1aedee50168fa0c4a1c814ef44a9e6aa796c0
 
                     with self.shoot_photo_mutex:
                         if self.shoot_photo:
@@ -139,14 +94,6 @@ class MainWindow(QMainWindow):
                             #np.add(dneg, dpos, buffer_wrap)
                             #np.copyto(buffer_wrap, self.background)
 
-<<<<<<< HEAD
-                # Connect the buffer's chunk data to the device's property map
-                # This allows for properties backed by chunk data to be updated
-                self.device_property_map.connect_chunkdata(buf)
-                height, width, channels = np.shape(buffer_wrap)
-                image = QImage(buffer_wrap.data, width, height, channels*width, QImage.Format_Grayscale8)
-                self.video.setPixmap(QPixmap.fromImage(image))
-=======
                             #buffer_wrap[np.abs(diff)>10] = 0
                     
                         
@@ -159,7 +106,6 @@ class MainWindow(QMainWindow):
                     # This allows for properties backed by chunk data to be updated
                     self.device_property_map.connect_chunkdata(buf)
                     self.display.display_buffer(buf)
->>>>>>> c2a1aedee50168fa0c4a1c814ef44a9e6aa796c0
         
 
         self.sink = ic4.QueueSink(Listener())
@@ -170,11 +116,11 @@ class MainWindow(QMainWindow):
 
         self.createUI()
 
-        # try:
-        #     self.display = self.video_widget.as_display()
-        #     self.display.set_render_position(ic4.DisplayRenderPosition.STRETCH_CENTER)
-        # except Exception as e:
-        #     QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
+        try:
+            self.display = self.video_widget.as_display()
+            self.display.set_render_position(ic4.DisplayRenderPosition.STRETCH_CENTER)
+        except Exception as e:
+            QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
 
         if QFileInfo.exists(self.device_file):
             try:
@@ -321,18 +267,10 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.select_background_act)
         toolbar.addAction(self.background_subtraction_act)
 
-        # self.video_widget = ic4.pyside6.DisplayWidget()
-        # self.video_widget.setMinimumSize(640, 480)
-        self.video_scene = QGraphicsScene(self)
-        self.video_view = ZoomableGraphicsView(self)
-        self.video_view.setDragMode(QGraphicsView.ScrollHandDrag)
-        self.video_view.setScene(self.video_scene)
-        #self.video_view.setAlignment(Qt.AlignCenter)
-        self.video_view.setMinimumSize(640, 480)
+        self.video_widget = ic4.pyside6.DisplayWidget()
+        self.video_widget.setMinimumSize(640, 480)
 
-        self.setCentralWidget(self.video_view)
-        self.video = QGraphicsPixmapItem()
-        self.video_scene.addItem(self.video)
+        self.setCentralWidget(self.video_widget)
         
 
         self.statusBar().showMessage("Ready")
@@ -549,7 +487,7 @@ class MainWindow(QMainWindow):
                     if self.capture_to_video:
                         self.onStopCaptureVideo()
                 else:
-                    self.grabber.stream_setup(self.sink)
+                    self.grabber.stream_setup(self.sink, self.display)
 
         except ic4.IC4Exception as e:
             QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
