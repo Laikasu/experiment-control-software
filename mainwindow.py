@@ -22,7 +22,7 @@ class GotPhotoEvent(QEvent):
         self.image_buffer = buffer
 
 class MainWindow(QMainWindow):
-    new_frame = Signal(QImage)
+    new_frame = Signal(np.ndarray)
     def __init__(self):
         application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
         QMainWindow.__init__(self)
@@ -595,9 +595,7 @@ class MainWindow(QMainWindow):
         self.background_subtraction_act.setChecked(self.subtract_background)
     
     def update_frame(self, frame):
-        height, width, channels = np.shape(frame)
-        image = QImage(frame.data, width, height, channels*width, QImage.Format_Grayscale8)
-        self.new_frame.emit(image)
+        self.new_frame.emit(frame)
     
-    def update_pixmap(self, image : QImage):
-        self.video_view.update_image(image)
+    def update_pixmap(self, frame):
+        self.video_view.update_image(frame)

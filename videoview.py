@@ -1,6 +1,8 @@
 from PySide6.QtCore import QRectF, QMargins
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
+
+import numpy as np
 
 
 class VideoView(QGraphicsView):
@@ -17,8 +19,9 @@ class VideoView(QGraphicsView):
         self.zoom_factor = 1.25  # Zoom in/out factor
         self.current_scale = 1.0  # Track the current scale
 
-    def update_image(self, image):
-        self._current_frame.setPixmap(QPixmap.fromImage(image))
+    def update_image(self, frame):
+        height, width, channels = np.shape(frame)
+        self._current_frame.setPixmap(QPixmap.fromImage(QImage(frame.data, width, height, 2*channels*width, QImage.Format_Grayscale16)))
         
 
     def wheelEvent(self, event):
