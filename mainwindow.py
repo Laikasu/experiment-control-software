@@ -617,7 +617,9 @@ class MainWindow(QMainWindow):
             else:
                 return 0
             self.background = background.astype(backgrounds[0].dtype)[:,:,np.newaxis]
-            
+            height, width, channels = np.shape(self.background)
+            image = QImage(self.background.data, width, height, channels*width, QImage.Format_Grayscale8)
+            self.video.setPixmap(QPixmap.fromImage(image))
 
             #self.backgrounds_directory = QFileInfo(full_path).absolutePath()
 
