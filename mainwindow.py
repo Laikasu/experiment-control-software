@@ -98,10 +98,10 @@ class MainWindow(QMainWindow):
 
                         # intersection of visible area and roi
                         if self.roi is not None:
-                            bounds[0] = min(bounds[0], self.roi[0])
-                            bounds[1] = min(bounds[1], self.roi[1])
-                            bounds[2] = max(bounds[2], self.roi[2])
-                            bounds[3] = max(bounds[3], self.roi[3])
+                            bounds[0] = max(bounds[0], self.roi[0])
+                            bounds[1] = max(bounds[1], self.roi[1])
+                            bounds[2] = min(bounds[2], self.roi[2])
+                            bounds[3] = min(bounds[3], self.roi[3])
                         
                         roi = np.index_exp[bounds[1]:bounds[3], bounds[0]:bounds[2]]
                         #cv2.subtract(buffer_wrap, self.background, buffer_wrap)
@@ -560,12 +560,18 @@ class MainWindow(QMainWindow):
     
     def difference_weighted_average(self, backgrounds):
         # Averaging algorithm
+        # Default uint16
+        d = np.int32
+        n = 65535
+        if (backgrounds[0].dtype == np.uint8):
+            d = np.int16
+            n = 257
         output_weights = np.zeros_like(backgrounds, dtype=np.float64)
         for i in range(len(backgrounds)):
             for j in range(len(backgrounds)):
                 if (i < j):
-                    diff = np.abs(np.subtract(backgrounds[i], backgrounds[j], dtype=np.int16))
-                    weight = 0.01 + np.where(diff < 10, 1, 0) + np.where(diff < 20, 0.5, 0)
+                    diff = np.abs(np.subtract(backgrounds[i], backgrounds[j], dtype=d))/n
+                    weight = 0.01 + np.where(diff < 0.02, 1, 0) + np.where(diff < 0.04, 0.5, 0)
                     output_weights[i] += weight
                     output_weights[j] += weight
                     # plt.imshow(weight, cmap='gray')
@@ -575,10 +581,10 @@ class MainWindow(QMainWindow):
     
     def select_background(self):
         filters = [
+            "TIFF (*.tif)",
             "Bitmap(*.bmp)",
             "JPEG (*.jpg)",
-            "Portable Network Graphics (*.png)",
-            "TIFF (*.tif)"
+            "Portable Network Graphics (*.png)"
         ]
         
         dialog = QFileDialog(self, "Select Backgrounds")
@@ -590,13 +596,13 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             #selected_filter = dialog.selectedNameFilter()
             #full_path = dialog.selectedFiles()[0]
-            backgrounds = [cv2.imread(image, 0) for image in dialog.selectedFiles()]
+            backgrounds = [cv2.imread(image, cv2.IMREAD_ANYDEPTH) for image in dialog.selectedFiles()]
 
             # Averaging algorithm
             if (len(backgrounds) > 1):
                 weights = self.difference_weighted_average(backgrounds)
                 background = np.average(backgrounds, axis=0, weights=weights)
-            elif (len(backgrounds) == 0):
+            elif (len(backgrounds) == 1):
                 background = backgrounds[0]
             else:
                 return 0
@@ -607,7 +613,7 @@ class MainWindow(QMainWindow):
 
     def save_background(self, image_buffer: ic4.ImageBuffer):
         name = datetime.now().strftime("background_%m-%d_%H-%M-%S")
-        image_buffer.save_as_bmp(self.backgrounds_directory + os.sep + f"{name}.bmp")
+        image_buffer.save_as_tiff(self.backgrounds_directory + os.sep + f"{name}.tif")
 
     def toggle_background_subtraction(self):
         self.subtract_background = not self.subtract_background
