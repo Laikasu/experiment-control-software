@@ -1,6 +1,6 @@
-from PySide6.QtCore import QRectF, QMargins
-from PySide6.QtGui import QPixmap, QImage
-from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
+from PySide6.QtCore import QRectF, QMargins, Qt
+from PySide6.QtGui import QPixmap, QImage, QPen
+from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsRectItem
 
 import numpy as np
 
@@ -13,6 +13,7 @@ class VideoView(QGraphicsView):
         self._current_frame = QGraphicsPixmapItem()
         self._scene.addItem(self._current_frame)
         self._rect = None
+        self.roi = None
         self.setMinimumSize(640, 480)
         self.setScene(self._scene)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
@@ -25,6 +26,17 @@ class VideoView(QGraphicsView):
             self._current_frame.setPixmap(QPixmap.fromImage(QImage(frame.data, width, height, 2*channels*width, QImage.Format_Grayscale16)))
         elif frame.dtype == np.uint8:
             self._current_frame.setPixmap(QPixmap.fromImage(QImage(frame.data, width, height, channels*width, QImage.Format_Grayscale8)))
+        
+    def show_roi(self, bounds):
+        if self.roi is None:
+            self.roi = QGraphicsRectItem(bounds[0], bounds[1], bounds[2]-bounds[0], bounds[3]-bounds[1])
+            pen = QPen(Qt.red)
+            pen.setWidth(2)
+            self.roi.setPen(pen)
+            self._scene.addItem(self.roi)
+        else:
+            self.roi.setRect(bounds[0], bounds[1], bounds[2]-bounds[0], bounds[3]-bounds[1])
+
         
 
     def wheelEvent(self, event):

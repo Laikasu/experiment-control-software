@@ -56,7 +56,7 @@ class MainWindow(QMainWindow):
 
         self.background = None
         self.subtract_background = False
-        self._bounds = None
+        self.roi = None
 
         class Listener(ic4.QueueSinkListener):
             def sink_connected(self, sink: ic4.QueueSink, image_type: ic4.ImageType, min_buffers_required: int) -> bool:
@@ -96,18 +96,21 @@ class MainWindow(QMainWindow):
                         bounds = self.video_view.get_bounds()
 
                         # intersection of visible area and roi
-                        if self._bounds is not None:
-                            bounds[0] = min(bounds[0], self._bounds[0])
-                            bounds[1] = min(bounds[1], self._bounds[1])
-                            bounds[2] = max(bounds[2], self._bounds[2])
-                            bounds[3] = max(bounds[3], self._bounds[3])
+                        if self.roi is not None:
+                            bounds[0] = min(bounds[0], self.roi[0])
+                            bounds[1] = min(bounds[1], self.roi[1])
+                            bounds[2] = max(bounds[2], self.roi[2])
+                            bounds[3] = max(bounds[3], self.roi[3])
                         
                         roi = np.index_exp[bounds[1]:bounds[3], bounds[0]:bounds[2]]
                         #cv2.subtract(buffer_wrap, self.background, buffer_wrap)
 
                         # (reference + signal) / reference
-                        diff = np.divide(np.subtract(buffer_wrap[roi], self.background[roi], dtype=np.int16), self.background[roi], dtype=np.float64)
-                        buffer_wrap[roi] = (diff*127 + 127).astype(np.uint8)
+                        diff = np.divide(np.subtract(buffer_wrap[roi], self.background[roi], dtype=np.int32), self.background[roi], dtype=np.float64)
+                        if (buffer_wrap.dtype == np.uint8):
+                            buffer_wrap[roi] = ((diff+1)*128).astype(np.uint8)
+                        elif (buffer_wrap.dtype == np.uint16):
+                            buffer_wrap[roi] = ((diff+1)*32768).astype(np.uint16)
                         
                         #np.copyto(buffer_wrap, (diff*127 + 127).astype(np.uint8))
 
@@ -226,13 +229,12 @@ class MainWindow(QMainWindow):
 
         self.background_subtraction_act = QAction("Background Subtraction", self)
         self.background_subtraction_act.setStatusTip("Toggle background subtraction")
-        self.background_subtraction_act.triggered.connect(self.set_roi)
+        self.background_subtraction_act.setCheckable(True)
+        self.background_subtraction_act.triggered.connect(self.toggle_background_subtraction)
 
-        self.set_roi_act = QAction("Background Subtraction", self)
-        self.set_roi_act.setStatusTip("Toggle background subtraction")
-        self.set_roi_act.setCheckable(True)
-        self.set_roi_act.triggered.connect(self.toggle_background_subtraction)
-
+        self.set_roi_act = QAction("Select as ROI", self)
+        self.set_roi_act.setStatusTip("Set current view as ROI")
+        self.set_roi_act.triggered.connect(self.set_roi)
 
 
         exit_act = QAction("E&xit", self)
@@ -597,6 +599,7 @@ class MainWindow(QMainWindow):
             else:
                 return 0
             self.background = background.astype(backgrounds[0].dtype)[:,:,np.newaxis]
+            self.video_view.update_image(self.background)
 
             #self.backgrounds_directory = QFileInfo(full_path).absolutePath()
 
@@ -609,7 +612,9 @@ class MainWindow(QMainWindow):
         self.background_subtraction_act.setChecked(self.subtract_background)
     
     def set_roi(self):
-        self._bounds = self.video_view.get_bounds()
+        self.roi = self.video_view.get_bounds()
+        self.video_view.show_roi(self.roi)
+    
 
     def update_frame(self, frame):
         self.new_frame.emit(frame)
