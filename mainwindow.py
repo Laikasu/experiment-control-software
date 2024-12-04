@@ -57,6 +57,7 @@ class MainWindow(QMainWindow):
         self.background = None
         self.subtract_background = False
         self.roi = None
+        self.scale = 1
 
         class Listener(ic4.QueueSinkListener):
             def sink_connected(self, sink: ic4.QueueSink, image_type: ic4.ImageType, min_buffers_required: int) -> bool:
@@ -107,10 +108,11 @@ class MainWindow(QMainWindow):
 
                         # (reference + signal) / reference
                         diff = np.divide(np.subtract(buffer_wrap[roi], self.background[roi], dtype=np.int32), self.background[roi], dtype=np.float64)
+                        diff = np.clip(diff, -1, 1)
                         if (buffer_wrap.dtype == np.uint8):
-                            buffer_wrap[roi] = ((diff+1)*128).astype(np.uint8)
+                            buffer_wrap[roi] = ((diff+1)*127).astype(np.uint8)
                         elif (buffer_wrap.dtype == np.uint16):
-                            buffer_wrap[roi] = ((diff+1)*32768).astype(np.uint16)
+                            buffer_wrap[roi] = ((diff+1)*32767).astype(np.uint16)
                         
                         #np.copyto(buffer_wrap, (diff*127 + 127).astype(np.uint8))
 
