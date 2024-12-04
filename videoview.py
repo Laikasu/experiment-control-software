@@ -59,7 +59,15 @@ class VideoView(QGraphicsView):
         self.scale(1 / self.zoom_factor, 1 / self.zoom_factor)
         self.current_scale /= self.zoom_factor
         self.update_margins()
-
+    
+    def get_bounds(self):
+        bounds = np.array(self.mapToScene(self.viewport().rect()).boundingRect().getCoords(), dtype=np.int16)
+        bounds[0] = max(bounds[0], 0)
+        bounds[1] = max(bounds[1], 0)
+        bounds[2] = min(bounds[2], self._current_frame.pixmap().width() - 1)
+        bounds[3] = min(bounds[3], self._current_frame.pixmap().height() - 1)
+        return bounds
+    
     def update_margins(self):
         if (not self._current_frame.pixmap().isNull()):
             rect = self.mapToScene(self.viewport().rect()).boundingRect()

@@ -56,6 +56,7 @@ class MainWindow(QMainWindow):
 
         self.background = None
         self.subtract_background = False
+        self._bounds = None
 
         class Listener(ic4.QueueSinkListener):
             def sink_connected(self, sink: ic4.QueueSink, image_type: ic4.ImageType, min_buffers_required: int) -> bool:
@@ -90,11 +91,17 @@ class MainWindow(QMainWindow):
                     #roi = self.video_view.mapToScene(self.video_view.viewport().rect()).boundingRect().getCoords()
                     if (self.background is not None):
                         # Only subtract in visible area: increases performance a lot!
-                        bounds = np.array(self.video_view.mapToScene(self.video_view.viewport().rect()).boundingRect().getCoords(), dtype=np.int16)
-                        bounds[0] = max(bounds[0], 0)
-                        bounds[1] = max(bounds[1], 0)
-                        bounds[2] = min(bounds[2], sink.output_image_type.width - 1)
-                        bounds[3] = min(bounds[3], sink.output_image_type.height - 1)
+
+                        # Visible area
+                        bounds = self.video_view.get_bounds()
+
+                        # intersection of visible area and roi
+                        if self._bounds is not None:
+                            bounds[0] = min(bounds[0], self._bounds[0])
+                            bounds[1] = min(bounds[1], self._bounds[1])
+                            bounds[2] = max(bounds[2], self._bounds[2])
+                            bounds[3] = max(bounds[3], self._bounds[3])
+                        
                         roi = np.index_exp[bounds[1]:bounds[3], bounds[0]:bounds[2]]
                         #cv2.subtract(buffer_wrap, self.background, buffer_wrap)
 
@@ -219,8 +226,12 @@ class MainWindow(QMainWindow):
 
         self.background_subtraction_act = QAction("Background Subtraction", self)
         self.background_subtraction_act.setStatusTip("Toggle background subtraction")
-        self.background_subtraction_act.setCheckable(True)
-        self.background_subtraction_act.triggered.connect(self.toggle_background_subtraction)
+        self.background_subtraction_act.triggered.connect(self.set_roi)
+
+        self.set_roi_act = QAction("Background Subtraction", self)
+        self.set_roi_act.setStatusTip("Toggle background subtraction")
+        self.set_roi_act.setCheckable(True)
+        self.set_roi_act.triggered.connect(self.toggle_background_subtraction)
 
 
 
@@ -254,6 +265,8 @@ class MainWindow(QMainWindow):
         capture_menu.addAction(self.select_background_act)
         capture_menu.addAction(self.save_background_act)
         capture_menu.addAction(self.background_subtraction_act)
+        capture_menu.addAction(self.set_roi_act)
+
 
 
         #=========#
@@ -278,6 +291,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.save_background_act)
         toolbar.addAction(self.select_background_act)
         toolbar.addAction(self.background_subtraction_act)
+        toolbar.addAction(self.set_roi_act)
 
         self.video_view = VideoView(self)
         self.new_frame.connect(self.update_pixmap)
@@ -594,6 +608,9 @@ class MainWindow(QMainWindow):
         self.subtract_background = not self.subtract_background
         self.background_subtraction_act.setChecked(self.subtract_background)
     
+    def set_roi(self):
+        self._bounds = self.video_view.get_bounds()
+
     def update_frame(self, frame):
         self.new_frame.emit(frame)
     
