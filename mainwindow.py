@@ -599,7 +599,7 @@ class MainWindow(QMainWindow):
             else:
                 return 0
             self.background = background.astype(backgrounds[0].dtype)[:,:,np.newaxis]
-            self.video_view.update_image(self.background)
+            #self.video_view.update_image(self.background)
 
             #self.backgrounds_directory = QFileInfo(full_path).absolutePath()
 
