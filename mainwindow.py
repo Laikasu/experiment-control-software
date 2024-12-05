@@ -86,7 +86,8 @@ class MainWindow(QMainWindow):
                     except ic4.IC4Exception as ex:
                         pass
                 
-                buffer_wrap = buf.numpy_copy()
+                buffer = buf.numpy_copy()
+                print(np.shape(buffer))
                 
                 if (self.subtract_background):
                     #roi = self.video_view.mapToScene(self.video_view.viewport().rect()).boundingRect().getCoords()
@@ -104,31 +105,31 @@ class MainWindow(QMainWindow):
                             bounds[3] = min(bounds[3], self.roi[3])
                         
                         roi = np.index_exp[bounds[1]:bounds[3], bounds[0]:bounds[2]]
-                        #cv2.subtract(buffer_wrap, self.background, buffer_wrap)
+                        #cv2.subtract(buffer, self.background, buffer)
 
                         # (reference + signal) / reference
-                        diff = np.divide(np.subtract(buffer_wrap[roi], self.background[roi], dtype=np.int32), self.background[roi], dtype=np.float64)
+                        diff = np.divide(np.subtract(buffer[roi], self.background[roi], dtype=np.int32), self.background[roi], dtype=np.float64)
                         diff = np.clip(diff, -1, 1)
-                        if (buffer_wrap.dtype == np.uint8):
-                            buffer_wrap[roi] = ((diff+1)*127).astype(np.uint8)
-                        elif (buffer_wrap.dtype == np.uint16):
-                            buffer_wrap[roi] = ((diff+1)*32767).astype(np.uint16)
+                        if (buffer.dtype == np.uint8):
+                            buffer[roi] = ((diff+1)*127).astype(np.uint8)
+                        elif (buffer.dtype == np.uint16):
+                            buffer[roi] = ((diff+1)*32767).astype(np.uint16)
                         
-                        #np.copyto(buffer_wrap, (diff*127 + 127).astype(np.uint8))
+                        #np.copyto(buffer, (diff*127 + 127).astype(np.uint8))
 
-                        #buffer_wrap[np.abs(diff)>10] = 0
+                        #buffer[np.abs(diff)>10] = 0
                 
                     
-                    #np.copyto(buffer_wrap[:,:,0], dpos, where=(dpos != 0))
-                    #np.copyto(buffer_wrap[:,:,2], dneg, where=(dneg != 0))
+                    #np.copyto(buffer[:,:,0], dpos, where=(dpos != 0))
+                    #np.copyto(buffer[:,:,2], dneg, where=(dneg != 0))
                     
-                    #cv2.subtract(buffer_wrap, self.background, buffer_wrap)
+                    #cv2.subtract(buffer, self.background, buffer)
                 
-                self.update_frame(buffer_wrap)
+                self.update_frame(buffer)
                 # Connect the buffer's chunk data to the device's property map
                 # This allows for properties backed by chunk data to be updated
                 self.device_property_map.connect_chunkdata(buf)
-                #self.update_frame(buffer_wrap)
+                #self.update_frame(buffer)
 
         
 
@@ -559,27 +560,18 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
     
     def difference_weighted_average(self, backgrounds):
-        # Averaging algorithm
-        # Default uint16
-        d = np.int32
-        n = 65535
-        if (backgrounds[0].dtype == np.uint8):
-            d = np.int16
-            n = 257
         output_weights = np.zeros_like(backgrounds, dtype=np.float64)
         for i in range(len(backgrounds)):
             for j in range(len(backgrounds)):
                 if (i < j):
-                    diff = np.abs(np.subtract(backgrounds[i], backgrounds[j], dtype=d))/n
-                    weight = 0.01 + np.where(diff < 0.02, 1, 0) + np.where(diff < 0.04, 0.5, 0)
-                    output_weights[i] += weight
-                    output_weights[j] += weight
-                    # plt.imshow(weight, cmap='gray')
-                    # plt.show()
-
+                    diff = np.subtract(backgrounds[i], backgrounds[j], dtype=np.int32)/backgrounds[j]
+                    weight = np.exp(-np.abs(diff)/0.004)
+                    output_weights[i] = np.maximum(weight, output_weights[i])
+                    output_weights[j] = np.maximum(weight, output_weights[j])
+        
         return output_weights
     
-    def select_background(self):
+    def select_background(self, backgrounds):
         filters = [
             "TIFF (*.tif)",
             "Bitmap(*.bmp)",
@@ -597,7 +589,6 @@ class MainWindow(QMainWindow):
             #selected_filter = dialog.selectedNameFilter()
             #full_path = dialog.selectedFiles()[0]
             backgrounds = [cv2.imread(image, cv2.IMREAD_ANYDEPTH) for image in dialog.selectedFiles()]
-
             # Averaging algorithm
             if (len(backgrounds) > 1):
                 weights = self.difference_weighted_average(backgrounds)
@@ -608,7 +599,6 @@ class MainWindow(QMainWindow):
                 return 0
             self.background = background.astype(backgrounds[0].dtype)[:,:,np.newaxis]
             #self.video_view.update_image(self.background)
-
             #self.backgrounds_directory = QFileInfo(full_path).absolutePath()
 
     def save_background(self, image_buffer: ic4.ImageBuffer):
