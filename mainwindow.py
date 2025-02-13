@@ -1,16 +1,20 @@
 
 from threading import Lock
 
-from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt
-from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon
+from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, Signal
+from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
+
 import os
+import asyncio
 from datetime import datetime
 import cv2
 import numpy as np
-import ctypes
 
 import imagingcontrol4 as ic4
+from videoview import VideoView
+
+from nikon import MicroscopeDevice
 
 GOT_PHOTO_EVENT = QEvent.Type(QEvent.Type.User + 1)
 DEVICE_LOST_EVENT = QEvent.Type(QEvent.Type.User + 2)
@@ -21,10 +25,16 @@ class GotPhotoEvent(QEvent):
         self.image_buffer = buffer
 
 class MainWindow(QMainWindow):
+    new_frame = Signal(np.ndarray)
     def __init__(self):
         application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
         QMainWindow.__init__(self)
         self.setWindowIcon(QIcon(application_path + "/images/tis.ico"))
+
+        # Setup stage
+        # Setup microscope connection
+        devices = MicroscopeDevice.list()
+        self.microscope = next(devices)
 
         # Make sure the %appdata%/demoapp directory exists
         appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
@@ -55,6 +65,8 @@ class MainWindow(QMainWindow):
         self.processing_mutex = Lock()
         self.background = None
         self.subtract_background = False
+        self.roi = None
+        self.scale = 1
 
         class Listener(ic4.QueueSinkListener):
             def sink_connected(self, sink: ic4.QueueSink, image_type: ic4.ImageType, min_buffers_required: int) -> bool:
@@ -67,9 +79,13 @@ class MainWindow(QMainWindow):
                 pass
 
             def frames_queued(listener, sink: ic4.QueueSink):
+<<<<<<< HEAD
                 with self.processing_mutex:
                     buf = sink.pop_output_buffer()
                     buffer_wrap = buf.numpy_wrap()
+=======
+                buf = sink.pop_output_buffer()
+>>>>>>> qtdisplay
 
                     with self.shoot_photo_mutex:
                         if self.shoot_photo:
@@ -79,6 +95,7 @@ class MainWindow(QMainWindow):
                             # the main thread of our GUI. 
                             QApplication.postEvent(self, GotPhotoEvent(buf))
 
+<<<<<<< HEAD
                     if self.capture_to_video and not self.video_capture_pause:
                         try:
                             self.video_writer.add_frame(buf)
@@ -106,23 +123,62 @@ class MainWindow(QMainWindow):
                     # This allows for properties backed by chunk data to be updated
                     self.device_property_map.connect_chunkdata(buf)
                     self.display.display_buffer(buf)
-        
-        class DisplayListener(ic4.QueueSinkListener):
-            def sink_connected(self, sink: ic4.QueueSink, image_type: ic4.ImageType, min_buffers_required: int) -> bool:
-                # Allocate more buffers than suggested, because we temporarily take some buffers
-                # out of circulation when saving an image or video files.
-                sink.alloc_and_queue_buffers(min_buffers_required)
-                return True
+=======
+                if self.capture_to_video and not self.video_capture_pause:
+                    try:
+                        self.video_writer.add_frame(buf)
+                    except ic4.IC4Exception as ex:
+                        pass
+                
+                buffer = buf.numpy_copy()
+                print(np.shape(buffer))
+                
+                if (self.subtract_background):
+                    #roi = self.video_view.mapToScene(self.video_view.viewport().rect()).boundingRect().getCoords()
+                    if (self.background is not None):
+                        # Only subtract in visible area: increases performance a lot!
 
-            def sink_disconnected(self, sink: ic4.QueueSink):
-                pass
+                        # Visible area
+                        bounds = self.video_view.get_bounds()
 
-            def frames_queued(listener, sink: ic4.QueueSink):
-                buf = sink.pop_output_buffer()
+                        # intersection of visible area and roi
+                        if self.roi is not None:
+                            bounds[0] = max(bounds[0], self.roi[0])
+                            bounds[1] = max(bounds[1], self.roi[1])
+                            bounds[2] = min(bounds[2], self.roi[2])
+                            bounds[3] = min(bounds[3], self.roi[3])
+                        
+                        roi = np.index_exp[bounds[1]:bounds[3], bounds[0]:bounds[2]]
+                        #cv2.subtract(buffer, self.background, buffer)
+
+                        # (reference + signal) / reference
+                        diff = np.divide(np.subtract(buffer[roi], self.background[roi], dtype=np.int32), self.background[roi], dtype=np.float64)
+                        diff = np.clip(diff, -1, 1)
+                        if (buffer.dtype == np.uint8):
+                            buffer[roi] = ((diff+1)*127).astype(np.uint8)
+                        elif (buffer.dtype == np.uint16):
+                            buffer[roi] = ((diff+1)*32767).astype(np.uint16)
+                        
+                        #np.copyto(buffer, (diff*127 + 127).astype(np.uint8))
+
+                        #buffer[np.abs(diff)>10] = 0
+                
+                    
+                    #np.copyto(buffer[:,:,0], dpos, where=(dpos != 0))
+                    #np.copyto(buffer[:,:,2], dneg, where=(dneg != 0))
+                    
+                    #cv2.subtract(buffer, self.background, buffer)
+                
+                self.update_frame(buffer)
+                # Connect the buffer's chunk data to the device's property map
+                # This allows for properties backed by chunk data to be updated
                 self.device_property_map.connect_chunkdata(buf)
+                #self.update_frame(buffer)
+
+>>>>>>> qtdisplay
+        
 
         self.sink = ic4.QueueSink(Listener())
-        self.sink2 = ic4.QueueSink(DisplayListener())
 
         self.property_dialog = None
 
@@ -130,11 +186,11 @@ class MainWindow(QMainWindow):
 
         self.createUI()
 
-        try:
-            self.display = self.video_widget.as_display()
-            self.display.set_render_position(ic4.DisplayRenderPosition.STRETCH_CENTER)
-        except Exception as e:
-            QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
+        # try:
+        #     self.display = self.video_widget.as_display()
+        #     self.display.set_render_position(ic4.DisplayRenderPosition.STRETCH_CENTER)
+        # except Exception as e:
+        #     QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
 
         if QFileInfo.exists(self.device_file):
             try:
@@ -224,6 +280,15 @@ class MainWindow(QMainWindow):
         self.background_subtraction_act.setCheckable(True)
         self.background_subtraction_act.triggered.connect(self.toggle_background_subtraction)
 
+        self.set_roi_act = QAction("Select as ROI", self)
+        self.set_roi_act.setStatusTip("Set current view as ROI")
+        self.set_roi_act.triggered.connect(self.set_roi)
+
+        self.move_up_act = QAction("Move Up", self)
+        self.move_up_act.triggered.connect(lambda: self.move_z(1))
+
+        self.move_down_act = QAction("Move Down", self)
+        self.move_down_act.triggered.connect(lambda: self.move_z(-1))
 
 
         exit_act = QAction("E&xit", self)
@@ -256,6 +321,8 @@ class MainWindow(QMainWindow):
         capture_menu.addAction(self.select_background_act)
         capture_menu.addAction(self.save_background_act)
         capture_menu.addAction(self.background_subtraction_act)
+        capture_menu.addAction(self.set_roi_act)
+
 
 
         #=========#
@@ -280,10 +347,18 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.save_background_act)
         toolbar.addAction(self.select_background_act)
         toolbar.addAction(self.background_subtraction_act)
+        toolbar.addAction(self.set_roi_act)
+        toolbar.addSeparator()
+        toolbar.addAction(self.move_up_act)
+        toolbar.addAction(self.move_down_act)
 
-        self.video_widget = ic4.pyside6.DisplayWidget()
-        self.video_widget.setMinimumSize(640, 480)
-        self.setCentralWidget(self.video_widget)
+        self.video_view = VideoView(self)
+        self.new_frame.connect(self.update_pixmap)
+
+        self.setCentralWidget(self.video_view)
+        #self.video = QGraphicsPixmapItem()
+        #self.video_scene.addItem(self.video)
+        
 
         self.statusBar().showMessage("Ready")
         self.statistics_label = QLabel("", self.statusBar())
@@ -508,9 +583,6 @@ class MainWindow(QMainWindow):
 
     def savePhoto(self, image_buffer: ic4.ImageBuffer):
         filters = [
-            "Bitmap(*.bmp)",
-            "JPEG (*.jpg)",
-            "Portable Network Graphics (*.png)",
             "TIFF (*.tif)"
         ]
         
@@ -527,38 +599,29 @@ class MainWindow(QMainWindow):
             self.data_directory = QFileInfo(full_path).absolutePath()
 
             try:
-                if selected_filter == filters[0]:
-                    image_buffer.save_as_bmp(full_path)
-                elif selected_filter == filters[1]:
-                    image_buffer.save_as_jpeg(full_path)
-                elif selected_filter == filters[2]:
-                    image_buffer.save_as_png(full_path)
-                else:
-                    image_buffer.save_as_tiff(full_path)
+                image_buffer.save_as_tiff(full_path)
+                
             except ic4.IC4Exception as e:
                 QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
     
     def difference_weighted_average(self, backgrounds):
-        # Averaging algorithm
         output_weights = np.zeros_like(backgrounds, dtype=np.float64)
         for i in range(len(backgrounds)):
             for j in range(len(backgrounds)):
                 if (i < j):
-                    diff = np.abs(np.subtract(backgrounds[i], backgrounds[j], dtype=np.int16))
-                    weight = 0.01 + np.where(diff < 10, 1, 0) + np.where(diff < 20, 0.5, 0)
-                    output_weights[i] += weight
-                    output_weights[j] += weight
-                    # plt.imshow(weight, cmap='gray')
-                    # plt.show()
-
+                    diff = np.subtract(backgrounds[i], backgrounds[j], dtype=np.int32)/backgrounds[j]
+                    weight = np.exp(-np.abs(diff)/0.004)
+                    output_weights[i] = np.maximum(weight, output_weights[i])
+                    output_weights[j] = np.maximum(weight, output_weights[j])
+        
         return output_weights
     
-    def select_background(self):
+    def select_background(self, backgrounds):
         filters = [
+            "TIFF (*.tif)",
             "Bitmap(*.bmp)",
             "JPEG (*.jpg)",
-            "Portable Network Graphics (*.png)",
-            "TIFF (*.tif)"
+            "Portable Network Graphics (*.png)"
         ]
         
         dialog = QFileDialog(self, "Select Backgrounds")
@@ -570,24 +633,39 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             #selected_filter = dialog.selectedNameFilter()
             #full_path = dialog.selectedFiles()[0]
-            backgrounds = [cv2.imread(image, 0) for image in dialog.selectedFiles()]
-
+            backgrounds = [cv2.imread(image, cv2.IMREAD_ANYDEPTH) for image in dialog.selectedFiles()]
             # Averaging algorithm
             if (len(backgrounds) > 1):
                 weights = self.difference_weighted_average(backgrounds)
                 background = np.average(backgrounds, axis=0, weights=weights)
-            elif (len(backgrounds) == 0):
+            elif (len(backgrounds) == 1):
                 background = backgrounds[0]
             else:
                 return 0
             self.background = background.astype(backgrounds[0].dtype)[:,:,np.newaxis]
-
+            #self.video_view.update_image(self.background)
             #self.backgrounds_directory = QFileInfo(full_path).absolutePath()
 
     def save_background(self, image_buffer: ic4.ImageBuffer):
         name = datetime.now().strftime("background_%m-%d_%H-%M-%S")
-        image_buffer.save_as_bmp(self.backgrounds_directory + os.sep + f"{name}.bmp")
+        image_buffer.save_as_tiff(self.backgrounds_directory + os.sep + f"{name}.tif")
 
     def toggle_background_subtraction(self):
         self.subtract_background = not self.subtract_background
         self.background_subtraction_act.setChecked(self.subtract_background)
+    
+    def set_roi(self):
+        self.roi = self.video_view.get_bounds()
+        self.video_view.show_roi(self.roi)
+    
+    def move_z(self, int: sign):
+        amount = int(sign*10)
+        status = microscope.get_status()
+        asyncio.run(microscope.set_z(status.z + amount))
+        
+
+    def update_frame(self, frame):
+        self.new_frame.emit(frame)
+    
+    def update_pixmap(self, frame):
+        self.video_view.update_image(frame)
