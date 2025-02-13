@@ -6,15 +6,13 @@ from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
 
 import os
-import asyncio
 from datetime import datetime
 import cv2
 import numpy as np
 
 import imagingcontrol4 as ic4
+from pycromanager import Acquisition, Core, Studio
 from videoview import VideoView
-
-from nikon import MicroscopeDevice
 
 GOT_PHOTO_EVENT = QEvent.Type(QEvent.Type.User + 1)
 DEVICE_LOST_EVENT = QEvent.Type(QEvent.Type.User + 2)
@@ -33,8 +31,8 @@ class MainWindow(QMainWindow):
 
         # Setup stage
         # Setup microscope connection
-        devices = MicroscopeDevice.list()
-        self.microscope = next(devices)
+        self.mmc = Core()
+        self.z_stage = self.mmc.get_focus_device()
 
         # Make sure the %appdata%/demoapp directory exists
         appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
@@ -600,10 +598,11 @@ class MainWindow(QMainWindow):
         self.roi = self.video_view.get_bounds()
         self.video_view.show_roi(self.roi)
     
-    def move_z(self, int: sign):
-        amount = int(sign*10)
-        status = microscope.get_status()
-        asyncio.run(microscope.set_z(status.z + amount))
+    def move_z(self, sign: int):
+        amount = sign*0.1
+        z_pos = self.mmc.get_position(self.z_stage)
+        print(z_pos)
+        #self.mmc.set_position(self.z_stage, z_pos + amount)
         
 
     def update_frame(self, frame):

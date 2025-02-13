@@ -2,4 +2,4 @@ imagingcontrol4>=1.2.0
 imagingcontrol4pyside6
 opencv-python
 numpy
-nikon
+pycromanager
