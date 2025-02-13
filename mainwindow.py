@@ -128,11 +128,11 @@ class MainWindow(QMainWindow):
 
         self.createUI()
 
-        # try:
-        #     self.display = self.video_widget.as_display()
-        #     self.display.set_render_position(ic4.DisplayRenderPosition.STRETCH_CENTER)
-        # except Exception as e:
-        #     QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
+        try:
+            self.display = self.video_widget.as_display()
+            self.display.set_render_position(ic4.DisplayRenderPosition.STRETCH_CENTER)
+        except Exception as e:
+            QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
 
         if QFileInfo.exists(self.device_file):
             try:
@@ -516,7 +516,7 @@ class MainWindow(QMainWindow):
                     if self.capture_to_video:
                         self.onStopCaptureVideo()
                 else:
-                    self.grabber.stream_setup(self.sink)
+                    self.grabber.stream_setup(self.sink, self.display)
 
         except ic4.IC4Exception as e:
             QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
