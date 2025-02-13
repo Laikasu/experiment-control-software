@@ -6,12 +6,15 @@ from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
 
 import os
+import asyncio
 from datetime import datetime
 import cv2
 import numpy as np
 
 import imagingcontrol4 as ic4
 from videoview import VideoView
+
+from nikon import MicroscopeDevice
 
 GOT_PHOTO_EVENT = QEvent.Type(QEvent.Type.User + 1)
 DEVICE_LOST_EVENT = QEvent.Type(QEvent.Type.User + 2)
@@ -27,6 +30,11 @@ class MainWindow(QMainWindow):
         application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
         QMainWindow.__init__(self)
         self.setWindowIcon(QIcon(application_path + "/images/tis.ico"))
+
+        # Setup stage
+        # Setup microscope connection
+        devices = MicroscopeDevice.list()
+        self.microscope = next(devices)
 
         # Make sure the %appdata%/demoapp directory exists
         appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
@@ -239,6 +247,12 @@ class MainWindow(QMainWindow):
         self.set_roi_act.setStatusTip("Set current view as ROI")
         self.set_roi_act.triggered.connect(self.set_roi)
 
+        self.move_up_act = QAction("Move Up", self)
+        self.move_up_act.triggered.connect(lambda: self.move_z(1))
+
+        self.move_down_act = QAction("Move Down", self)
+        self.move_down_act.triggered.connect(lambda: self.move_z(-1))
+
 
         exit_act = QAction("E&xit", self)
         exit_act.setShortcut(QKeySequence.Quit)
@@ -297,6 +311,9 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.select_background_act)
         toolbar.addAction(self.background_subtraction_act)
         toolbar.addAction(self.set_roi_act)
+        toolbar.addSeparator()
+        toolbar.addAction(self.move_up_act)
+        toolbar.addAction(self.move_down_act)
 
         self.video_view = VideoView(self)
         self.new_frame.connect(self.update_pixmap)
@@ -529,9 +546,6 @@ class MainWindow(QMainWindow):
 
     def savePhoto(self, image_buffer: ic4.ImageBuffer):
         filters = [
-            "Bitmap(*.bmp)",
-            "JPEG (*.jpg)",
-            "Portable Network Graphics (*.png)",
             "TIFF (*.tif)"
         ]
         
@@ -548,14 +562,8 @@ class MainWindow(QMainWindow):
             self.data_directory = QFileInfo(full_path).absolutePath()
 
             try:
-                if selected_filter == filters[0]:
-                    image_buffer.save_as_bmp(full_path)
-                elif selected_filter == filters[1]:
-                    image_buffer.save_as_jpeg(full_path)
-                elif selected_filter == filters[2]:
-                    image_buffer.save_as_png(full_path)
-                else:
-                    image_buffer.save_as_tiff(full_path)
+                image_buffer.save_as_tiff(full_path)
+                
             except ic4.IC4Exception as e:
                 QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
     
@@ -613,6 +621,11 @@ class MainWindow(QMainWindow):
         self.roi = self.video_view.get_bounds()
         self.video_view.show_roi(self.roi)
     
+    def move_z(self, int: sign):
+        amount = int(sign*10)
+        status = microscope.get_status()
+        asyncio.run(microscope.set_z(status.z + amount))
+        
 
     def update_frame(self, frame):
         self.new_frame.emit(frame)
