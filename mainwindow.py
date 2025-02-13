@@ -6,10 +6,11 @@ from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
 
 import os
-import asyncio
 from datetime import datetime
 import cv2
 import numpy as np
+
+# from pycromanager import Acquisition, Core, Studio
 
 import imagingcontrol4 as ic4
 from videoview import VideoView
@@ -32,6 +33,8 @@ class MainWindow(QMainWindow):
 
         # Setup stage
         # Setup microscope connection
+        # self.mmc = Core()
+        # self.z_stage = self.mmc.get_focus_device()
 
         # Make sure the %appdata%/demoapp directory exists
         appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
@@ -61,7 +64,6 @@ class MainWindow(QMainWindow):
 
         self.background = None
         self.subtract_background = False
-        self.roi = None
         self.scale = 1
 
         class Listener(ic4.QueueSinkListener):
@@ -92,7 +94,6 @@ class MainWindow(QMainWindow):
                         pass
                 
                 buffer = buf.numpy_copy()
-                print(np.shape(buffer))
                 
                 if (self.subtract_background):
                     #roi = self.video_view.mapToScene(self.video_view.viewport().rect()).boundingRect().getCoords()
@@ -101,24 +102,25 @@ class MainWindow(QMainWindow):
 
                         # Visible area
                         bounds = self.video_view.get_bounds()
+                        roi = self.video_view.get_roi()
 
                         # intersection of visible area and roi
-                        if self.roi is not None:
-                            bounds[0] = max(bounds[0], self.roi[0])
-                            bounds[1] = max(bounds[1], self.roi[1])
-                            bounds[2] = min(bounds[2], self.roi[2])
-                            bounds[3] = min(bounds[3], self.roi[3])
+                        if roi is not None:
+                            bounds[0] = max(bounds[0], roi[0])
+                            bounds[1] = max(bounds[1], roi[1])
+                            bounds[2] = min(bounds[2], roi[2])
+                            bounds[3] = min(bounds[3], roi[3])
                         
-                        roi = np.index_exp[bounds[1]:bounds[3], bounds[0]:bounds[2]]
+                        region = np.index_exp[bounds[1]:bounds[3], bounds[0]:bounds[2]]
                         #cv2.subtract(buffer, self.background, buffer)
 
                         # (reference + signal) / reference
-                        diff = np.divide(np.subtract(buffer[roi], self.background[roi], dtype=np.int32), self.background[roi], dtype=np.float64)
+                        diff = np.divide(np.subtract(buffer[region], self.background[region], dtype=np.int32), self.background[region], dtype=np.float64)
                         diff = np.clip(diff, -1, 1)
                         if (buffer.dtype == np.uint8):
-                            buffer[roi] = ((diff+1)*127).astype(np.uint8)
+                            buffer[region] = ((diff+1)*127).astype(np.uint8)
                         elif (buffer.dtype == np.uint16):
-                            buffer[roi] = ((diff+1)*32767).astype(np.uint16)
+                            buffer[region] = ((diff+1)*32767).astype(np.uint16)
                         
                         #np.copyto(buffer, (diff*127 + 127).astype(np.uint8))
 
@@ -240,9 +242,10 @@ class MainWindow(QMainWindow):
         self.background_subtraction_act.setCheckable(True)
         self.background_subtraction_act.triggered.connect(self.toggle_background_subtraction)
 
-        self.set_roi_act = QAction("Select as ROI", self)
-        self.set_roi_act.setStatusTip("Set current view as ROI")
-        self.set_roi_act.triggered.connect(self.set_roi)
+        self.set_roi_act = QAction("Select ROI", self)
+        self.set_roi_act.setStatusTip("Draw a rectangle to set ROI")
+        self.set_roi_act.setCheckable(True)
+        self.set_roi_act.triggered.connect(self.toggle_roi_mode)
 
         self.move_up_act = QAction("Move Up", self)
         self.move_up_act.triggered.connect(lambda: self.move_z(1))
@@ -612,11 +615,9 @@ class MainWindow(QMainWindow):
 
     def toggle_background_subtraction(self):
         self.subtract_background = not self.subtract_background
-        self.background_subtraction_act.setChecked(self.subtract_background)
     
-    def set_roi(self):
-        self.roi = self.video_view.get_bounds()
-        self.video_view.show_roi(self.roi)
+    def toggle_roi_mode(self):
+        self.video_view.roi_mode = not self.video_view.roi_mode
     
     def move_z(self, sign: int):
         amount = sign*0.1
