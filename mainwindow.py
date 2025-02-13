@@ -6,13 +6,14 @@ from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
 
 import os
+import asyncio
 from datetime import datetime
 import cv2
 import numpy as np
 
 import imagingcontrol4 as ic4
-from pycromanager import Acquisition, Core, Studio
 from videoview import VideoView
+
 
 GOT_PHOTO_EVENT = QEvent.Type(QEvent.Type.User + 1)
 DEVICE_LOST_EVENT = QEvent.Type(QEvent.Type.User + 2)
@@ -31,8 +32,6 @@ class MainWindow(QMainWindow):
 
         # Setup stage
         # Setup microscope connection
-        self.mmc = Core()
-        self.z_stage = self.mmc.get_focus_device()
 
         # Make sure the %appdata%/demoapp directory exists
         appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
@@ -60,7 +59,6 @@ class MainWindow(QMainWindow):
         self.grabber = ic4.Grabber()
         self.grabber.event_add_device_lost(lambda g: QApplication.postEvent(self, QEvent(DEVICE_LOST_EVENT)))
 
-        self.processing_mutex = Lock()
         self.background = None
         self.subtract_background = False
         self.roi = None
@@ -77,45 +75,67 @@ class MainWindow(QMainWindow):
                 pass
 
             def frames_queued(listener, sink: ic4.QueueSink):
-                with self.processing_mutex:
-                    buf = sink.pop_output_buffer()
-                    buffer_wrap = buf.numpy_wrap()
+                buf = sink.pop_output_buffer()
 
-                    with self.shoot_photo_mutex:
-                        if self.shoot_photo:
-                            self.shoot_photo = False
+                with self.shoot_photo_mutex:
+                    if self.shoot_photo:
+                        self.shoot_photo = False
 
-                            # Send an event to the main thread with a reference to 
-                            # the main thread of our GUI. 
-                            QApplication.postEvent(self, GotPhotoEvent(buf))
+                        # Send an event to the main thread with a reference to 
+                        # the main thread of our GUI. 
+                        QApplication.postEvent(self, GotPhotoEvent(buf))
 
-                    if self.capture_to_video and not self.video_capture_pause:
-                        try:
-                            self.video_writer.add_frame(buf)
-                        except ic4.IC4Exception as ex:
-                            pass
-                    
-                    if (self.subtract_background):
-                        if (self.background is not None):
-                            cv2.subtract(buffer_wrap, self.background, buffer_wrap)
-                            #diff = np.subtract(buffer_wrap, self.background, dtype=np.int16)
-                            #dpos = np.where(diff>10, diff.astype(np.uint8), 0)
-                            #dneg = np.where(diff<-10, (-diff).astype(np.uint8), 0)
-                            #np.add(dneg, dpos, buffer_wrap)
-                            #np.copyto(buffer_wrap, self.background)
+                if self.capture_to_video and not self.video_capture_pause:
+                    try:
+                        self.video_writer.add_frame(buf)
+                    except ic4.IC4Exception as ex:
+                        pass
+                
+                buffer = buf.numpy_copy()
+                print(np.shape(buffer))
+                
+                if (self.subtract_background):
+                    #roi = self.video_view.mapToScene(self.video_view.viewport().rect()).boundingRect().getCoords()
+                    if (self.background is not None):
+                        # Only subtract in visible area: increases performance a lot!
 
-                            #buffer_wrap[np.abs(diff)>10] = 0
-                    
+                        # Visible area
+                        bounds = self.video_view.get_bounds()
+
+                        # intersection of visible area and roi
+                        if self.roi is not None:
+                            bounds[0] = max(bounds[0], self.roi[0])
+                            bounds[1] = max(bounds[1], self.roi[1])
+                            bounds[2] = min(bounds[2], self.roi[2])
+                            bounds[3] = min(bounds[3], self.roi[3])
                         
-                        #np.copyto(buffer_wrap[:,:,0], dpos, where=(dpos != 0))
-                        #np.copyto(buffer_wrap[:,:,2], dneg, where=(dneg != 0))
-                        
-                        #cv2.subtract(buffer_wrap, self.background, buffer_wrap)
+                        roi = np.index_exp[bounds[1]:bounds[3], bounds[0]:bounds[2]]
+                        #cv2.subtract(buffer, self.background, buffer)
 
-                    # Connect the buffer's chunk data to the device's property map
-                    # This allows for properties backed by chunk data to be updated
-                    self.device_property_map.connect_chunkdata(buf)
-                    self.display.display_buffer(buf)
+                        # (reference + signal) / reference
+                        diff = np.divide(np.subtract(buffer[roi], self.background[roi], dtype=np.int32), self.background[roi], dtype=np.float64)
+                        diff = np.clip(diff, -1, 1)
+                        if (buffer.dtype == np.uint8):
+                            buffer[roi] = ((diff+1)*127).astype(np.uint8)
+                        elif (buffer.dtype == np.uint16):
+                            buffer[roi] = ((diff+1)*32767).astype(np.uint16)
+                        
+                        #np.copyto(buffer, (diff*127 + 127).astype(np.uint8))
+
+                        #buffer[np.abs(diff)>10] = 0
+                
+                    
+                    #np.copyto(buffer[:,:,0], dpos, where=(dpos != 0))
+                    #np.copyto(buffer[:,:,2], dneg, where=(dneg != 0))
+                    
+                    #cv2.subtract(buffer, self.background, buffer)
+                
+                self.update_frame(buffer)
+                # Connect the buffer's chunk data to the device's property map
+                # This allows for properties backed by chunk data to be updated
+                self.device_property_map.connect_chunkdata(buf)
+                #self.update_frame(buffer)
+
         
 
         self.sink = ic4.QueueSink(Listener())
@@ -126,11 +146,11 @@ class MainWindow(QMainWindow):
 
         self.createUI()
 
-        try:
-            self.display = self.video_widget.as_display()
-            self.display.set_render_position(ic4.DisplayRenderPosition.STRETCH_CENTER)
-        except Exception as e:
-            QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
+        # try:
+        #     self.display = self.video_widget.as_display()
+        #     self.display.set_render_position(ic4.DisplayRenderPosition.STRETCH_CENTER)
+        # except Exception as e:
+        #     QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
 
         if QFileInfo.exists(self.device_file):
             try:
@@ -514,7 +534,7 @@ class MainWindow(QMainWindow):
                     if self.capture_to_video:
                         self.onStopCaptureVideo()
                 else:
-                    self.grabber.stream_setup(self.sink, self.display)
+                    self.grabber.stream_setup(self.sink)
 
         except ic4.IC4Exception as e:
             QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
@@ -600,9 +620,9 @@ class MainWindow(QMainWindow):
     
     def move_z(self, sign: int):
         amount = sign*0.1
-        z_pos = self.mmc.get_position(self.z_stage)
-        print(z_pos)
-        #self.mmc.set_position(self.z_stage, z_pos + amount)
+        # z_pos = self.mmc.get_position(self.z_stage)
+        # print(z_pos)
+        # self.mmc.set_position(self.z_stage, z_pos + amount)
         
 
     def update_frame(self, frame):
