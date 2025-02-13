@@ -79,13 +79,9 @@ class MainWindow(QMainWindow):
                 pass
 
             def frames_queued(listener, sink: ic4.QueueSink):
-<<<<<<< HEAD
                 with self.processing_mutex:
                     buf = sink.pop_output_buffer()
                     buffer_wrap = buf.numpy_wrap()
-=======
-                buf = sink.pop_output_buffer()
->>>>>>> qtdisplay
 
                     with self.shoot_photo_mutex:
                         if self.shoot_photo:
@@ -95,7 +91,6 @@ class MainWindow(QMainWindow):
                             # the main thread of our GUI. 
                             QApplication.postEvent(self, GotPhotoEvent(buf))
 
-<<<<<<< HEAD
                     if self.capture_to_video and not self.video_capture_pause:
                         try:
                             self.video_writer.add_frame(buf)
@@ -123,59 +118,6 @@ class MainWindow(QMainWindow):
                     # This allows for properties backed by chunk data to be updated
                     self.device_property_map.connect_chunkdata(buf)
                     self.display.display_buffer(buf)
-=======
-                if self.capture_to_video and not self.video_capture_pause:
-                    try:
-                        self.video_writer.add_frame(buf)
-                    except ic4.IC4Exception as ex:
-                        pass
-                
-                buffer = buf.numpy_copy()
-                print(np.shape(buffer))
-                
-                if (self.subtract_background):
-                    #roi = self.video_view.mapToScene(self.video_view.viewport().rect()).boundingRect().getCoords()
-                    if (self.background is not None):
-                        # Only subtract in visible area: increases performance a lot!
-
-                        # Visible area
-                        bounds = self.video_view.get_bounds()
-
-                        # intersection of visible area and roi
-                        if self.roi is not None:
-                            bounds[0] = max(bounds[0], self.roi[0])
-                            bounds[1] = max(bounds[1], self.roi[1])
-                            bounds[2] = min(bounds[2], self.roi[2])
-                            bounds[3] = min(bounds[3], self.roi[3])
-                        
-                        roi = np.index_exp[bounds[1]:bounds[3], bounds[0]:bounds[2]]
-                        #cv2.subtract(buffer, self.background, buffer)
-
-                        # (reference + signal) / reference
-                        diff = np.divide(np.subtract(buffer[roi], self.background[roi], dtype=np.int32), self.background[roi], dtype=np.float64)
-                        diff = np.clip(diff, -1, 1)
-                        if (buffer.dtype == np.uint8):
-                            buffer[roi] = ((diff+1)*127).astype(np.uint8)
-                        elif (buffer.dtype == np.uint16):
-                            buffer[roi] = ((diff+1)*32767).astype(np.uint16)
-                        
-                        #np.copyto(buffer, (diff*127 + 127).astype(np.uint8))
-
-                        #buffer[np.abs(diff)>10] = 0
-                
-                    
-                    #np.copyto(buffer[:,:,0], dpos, where=(dpos != 0))
-                    #np.copyto(buffer[:,:,2], dneg, where=(dneg != 0))
-                    
-                    #cv2.subtract(buffer, self.background, buffer)
-                
-                self.update_frame(buffer)
-                # Connect the buffer's chunk data to the device's property map
-                # This allows for properties backed by chunk data to be updated
-                self.device_property_map.connect_chunkdata(buf)
-                #self.update_frame(buffer)
-
->>>>>>> qtdisplay
         
 
         self.sink = ic4.QueueSink(Listener())
