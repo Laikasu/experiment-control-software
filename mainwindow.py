@@ -1,7 +1,7 @@
 
 from threading import Lock
 
-from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, Signal
+from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, Signal, QThread
 from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
 
@@ -9,8 +9,9 @@ import os
 from datetime import datetime
 import cv2
 import numpy as np
+import time
 
-# from pycromanager import Acquisition, Core, Studio
+from pymmcore_plus import CMMCorePlus
 
 import imagingcontrol4 as ic4
 from videoview import VideoView
@@ -24,8 +25,19 @@ class GotPhotoEvent(QEvent):
         QEvent.__init__(self, GOT_PHOTO_EVENT)
         self.image_buffer = buffer
 
+class AquisitionThread(QThread):
+    finished = Signal(str)
+    def __init__(self, mmc, aquisitionfunc):
+        super().__init__()
+        self.mmc = mmc
+        self.func = aquisitionfunc
+    def run(self):
+        self.func()
+        self.finished.emit("Complete")
+        
+
 class MainWindow(QMainWindow):
-    new_frame = Signal(np.ndarray)
+    new_frame = Signal(np.ndarray, tuple)
     def __init__(self):
         application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
         QMainWindow.__init__(self)
@@ -33,8 +45,21 @@ class MainWindow(QMainWindow):
 
         # Setup stage
         # Setup microscope connection
-        # self.mmc = Core()
-        # self.z_stage = self.mmc.get_focus_device()
+
+        mm_dir = "C:/Program Files/Micro-Manager-2.0"
+        self.mmc = CMMCorePlus.instance()
+        self.mmc.setDeviceAdapterSearchPaths([mm_dir])
+        self.relpos = np.array([0, 0, 0], dtype=np.int16)
+        #self.mmc.loadSystemConfiguration()
+        self.mmc.loadSystemConfiguration(os.path.join(application_path, "MMConfig.cfg"))
+        self.z_stage = self.mmc.getFocusDevice()
+        self.xy_stage = self.mmc.getXYStageDevice()
+        if not self.z_stage:
+            print("z_stage not found")
+        if not self.xy_stage:
+            print("xy_stage not found")
+
+        
 
         # Make sure the %appdata%/demoapp directory exists
         appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
@@ -50,17 +75,19 @@ class MainWindow(QMainWindow):
         self.save_videos_directory = video_directory
 
         self.device_file = appdata_directory + "/device.json"
-        self.codec_config_file = appdata_directory + "/codecconfig.json"
 
         self.shoot_photo_mutex = Lock()
         self.shoot_photo = False
         self.shoot_bg = False
 
-        self.capture_to_video = False
-        self.video_capture_pause = False
+        self.aquiring = False
+        self.aquiring_mutex = Lock()
 
         self.grabber = ic4.Grabber()
         self.grabber.event_add_device_lost(lambda g: QApplication.postEvent(self, QEvent(DEVICE_LOST_EVENT)))
+
+        self.video_view = VideoView(self)
+        self.new_frame.connect(self.update_pixmap)
 
         self.background = None
         self.subtract_background = False
@@ -86,32 +113,31 @@ class MainWindow(QMainWindow):
                         # Send an event to the main thread with a reference to 
                         # the main thread of our GUI. 
                         QApplication.postEvent(self, GotPhotoEvent(buf))
-
-                if self.capture_to_video and not self.video_capture_pause:
-                    try:
-                        self.video_writer.add_frame(buf)
-                    except ic4.IC4Exception as ex:
-                        pass
                 
                 buffer = buf.numpy_copy()
+                # Visible area
+                bounds = self.video_view.get_bounds()
+                roi = self.video_view.get_roi()
+                
+
+                # intersection of visible area and roi
+                if roi is not None:
+                    roi_index = np.index_exp[roi[1]:roi[3], roi[0]:roi[2]]
+                    bounds[0] = max(bounds[0], roi[0])
+                    bounds[1] = max(bounds[1], roi[1])
+                    bounds[2] = min(bounds[2], roi[2])
+                    bounds[3] = min(bounds[3], roi[3])
+
+                region = np.index_exp[bounds[1]:bounds[3], bounds[0]:bounds[2]]
                 
                 if (self.subtract_background):
                     #roi = self.video_view.mapToScene(self.video_view.viewport().rect()).boundingRect().getCoords()
                     if (self.background is not None):
                         # Only subtract in visible area: increases performance a lot!
 
-                        # Visible area
-                        bounds = self.video_view.get_bounds()
-                        roi = self.video_view.get_roi()
-
-                        # intersection of visible area and roi
-                        if roi is not None:
-                            bounds[0] = max(bounds[0], roi[0])
-                            bounds[1] = max(bounds[1], roi[1])
-                            bounds[2] = min(bounds[2], roi[2])
-                            bounds[3] = min(bounds[3], roi[3])
                         
-                        region = np.index_exp[bounds[1]:bounds[3], bounds[0]:bounds[2]]
+                        
+                        
                         #cv2.subtract(buffer, self.background, buffer)
 
                         # (reference + signal) / reference
@@ -132,7 +158,10 @@ class MainWindow(QMainWindow):
                     
                     #cv2.subtract(buffer, self.background, buffer)
                 
-                self.update_frame(buffer)
+                if roi is None:
+                    self.new_frame.emit(buffer, roi)
+                else:
+                    self.new_frame.emit(buffer[roi_index], roi)
                 # Connect the buffer's chunk data to the device's property map
                 # This allows for properties backed by chunk data to be updated
                 self.device_property_map.connect_chunkdata(buf)
@@ -160,13 +189,8 @@ class MainWindow(QMainWindow):
                 self.onDeviceOpened()
             except ic4.IC4Exception as e:
                 QMessageBox.information(self, "", f"Loading last used device failed: {e}", QMessageBox.StandardButton.Ok)
-
-        if QFileInfo.exists(self.codec_config_file):
-            try:
-                self.video_writer.property_map.deserialize_from_file(self.codec_config_file)
-            except ic4.IC4Exception as e:
-                QMessageBox.information(self, "", f"Loading last codec configuration failed: {e}", QMessageBox.StandardButton.Ok)
-
+        
+        
         self.updateControls()
     
     
@@ -206,24 +230,6 @@ class MainWindow(QMainWindow):
         self.shoot_photo_act.setStatusTip("Shoot and save a photo")
         self.shoot_photo_act.triggered.connect(self.onShootPhoto)
 
-        self.record_start_act = QAction(QIcon(application_path + "images/recordstart.png"), "&Capture Video", self)
-        self.record_start_act.setToolTip("Capture video into MP4 file")
-        self.record_start_act.setCheckable(True)
-        self.record_start_act.triggered.connect(self.onStartStopCaptureVideo)
-
-        self.record_pause_act = QAction(QIcon(application_path + "images/recordpause.png"), "&Pause Capture Video", self)
-        self.record_pause_act.setStatusTip("Pause video capture")
-        self.record_pause_act.setCheckable(True)
-        self.record_pause_act.triggered.connect(self.onPauseCaptureVideo)
-
-        self.record_stop_act = QAction(QIcon(application_path + "images/recordstop.png"), "&Stop Capture Video", self)
-        self.record_stop_act.setStatusTip("Stop video capture")
-        self.record_stop_act.triggered.connect(self.onStopCaptureVideo)
-
-        self.codec_property_act = QAction(QIcon(application_path + "images/gear.png"), "&Codec Properties", self)
-        self.codec_property_act.setStatusTip("Configure the video codec")
-        self.codec_property_act.triggered.connect(self.onCodecProperties)
-
         self.close_device_act = QAction("Close", self)
         self.close_device_act.setStatusTip("Close the currently opened device")
         self.close_device_act.setShortcuts(QKeySequence.Close)
@@ -231,7 +237,7 @@ class MainWindow(QMainWindow):
 
         self.select_background_act = QAction("Select &Backgrounds", self)
         self.select_background_act.setStatusTip("Select background images")
-        self.select_background_act.triggered.connect(self.select_background)
+        self.select_background_act.triggered.connect(self.updateroi)
 
         self.save_background_act = QAction("&Save Background", self)
         self.save_background_act.setStatusTip("Save background image")
@@ -245,13 +251,10 @@ class MainWindow(QMainWindow):
         self.set_roi_act = QAction("Select ROI", self)
         self.set_roi_act.setStatusTip("Draw a rectangle to set ROI")
         self.set_roi_act.setCheckable(True)
-        self.set_roi_act.triggered.connect(self.toggle_roi_mode)
+        self.set_roi_act.triggered.connect(self.video_view.toggle_roi_mode)
 
-        self.move_up_act = QAction("Move Up", self)
-        self.move_up_act.triggered.connect(lambda: self.move_z(1))
-
-        self.move_down_act = QAction("Move Down", self)
-        self.move_down_act.triggered.connect(lambda: self.move_z(-1))
+        self.take_sequence_act = QAction("Take Sequence", self)
+        self.take_sequence_act.triggered.connect(self.start_aquisistion)
 
 
         exit_act = QAction("E&xit", self)
@@ -277,10 +280,6 @@ class MainWindow(QMainWindow):
 
         capture_menu = self.menuBar().addMenu("&Capture")
         capture_menu.addAction(self.shoot_photo_act)
-        capture_menu.addAction(self.record_start_act)
-        capture_menu.addAction(self.record_pause_act)
-        capture_menu.addAction(self.record_stop_act)
-        capture_menu.addAction(self.codec_property_act)
         capture_menu.addAction(self.select_background_act)
         capture_menu.addAction(self.save_background_act)
         capture_menu.addAction(self.background_subtraction_act)
@@ -303,24 +302,16 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addAction(self.shoot_photo_act)
         toolbar.addSeparator()
-        toolbar.addAction(self.record_start_act)
-        toolbar.addAction(self.record_pause_act)
-        toolbar.addAction(self.record_stop_act)
-        toolbar.addAction(self.codec_property_act)
         toolbar.addAction(self.save_background_act)
         toolbar.addAction(self.select_background_act)
         toolbar.addAction(self.background_subtraction_act)
         toolbar.addAction(self.set_roi_act)
         toolbar.addSeparator()
-        toolbar.addAction(self.move_up_act)
-        toolbar.addAction(self.move_down_act)
+        toolbar.addAction(self.take_sequence_act)
 
-        self.video_view = VideoView(self)
-        self.new_frame.connect(self.update_pixmap)
+
 
         self.setCentralWidget(self.video_view)
-        #self.video = QGraphicsPixmapItem()
-        #self.video_scene.addItem(self.video)
         
 
         self.statusBar().showMessage("Ready")
@@ -436,6 +427,11 @@ class MainWindow(QMainWindow):
 
     def onDeviceOpened(self):
         self.device_property_map = self.grabber.device_property_map
+        self.video_view.set_size(
+            self.device_property_map.get_value_int(ic4.PropId.WIDTH_MAX),
+            self.device_property_map.get_value_int(ic4.PropId.HEIGHT_MAX),
+            self.device_property_map.get_value_int(ic4.PropId.OFFSET_X),
+            self.device_property_map.get_value_int(ic4.PropId.OFFSET_Y))
 
         trigger_mode = self.device_property_map.find(ic4.PropId.TRIGGER_MODE)
         trigger_mode.event_add_notification(self.updateTriggerControl)
@@ -466,9 +462,6 @@ class MainWindow(QMainWindow):
         self.start_live_act.setEnabled(self.grabber.is_device_valid)
         self.start_live_act.setChecked(self.grabber.is_streaming)
         self.shoot_photo_act.setEnabled(self.grabber.is_streaming)
-        self.record_stop_act.setEnabled(self.capture_to_video)
-        self.record_pause_act.setChecked(self.video_capture_pause)
-        self.record_start_act.setChecked(self.capture_to_video)
         self.close_device_act.setEnabled(self.grabber.is_device_open)
         self.save_background_act.setEnabled(self.grabber.is_streaming)
 
@@ -481,53 +474,6 @@ class MainWindow(QMainWindow):
         except ic4.IC4Exception:
             self.camera_label.setText("No Device")
 
-    def onPauseCaptureVideo(self):
-        self.video_capture_pause = self.record_pause_act.isChecked()
-
-    def onStartStopCaptureVideo(self):
-        if self.capture_to_video:
-            self.stopCapturevideo()
-            return
-        
-        filters = [
-            "MP4 Video Files (*.mp4)"
-        ]
-        
-        dialog = QFileDialog(self, "Capture Video")
-        dialog.setNameFilters(filters)
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setDirectory(self.save_videos_directory)
-
-        if dialog.exec():
-            full_path = dialog.selectedFiles()[0]
-            self.save_videos_directory = QFileInfo(full_path).absolutePath()
-
-            fps = float(25)
-            try:
-                fps = self.device_property_map.get_value_float(ic4.PropId.ACQUISITION_FRAME_RATE)
-            except:
-                pass
-
-            try:
-                self.video_writer.begin_file(full_path, self.sink.output_image_type, fps)
-            except ic4.IC4Exception as e:
-                QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
-
-            self.capture_to_video = True
-            
-        self.updateControls()
-
-    def onStopCaptureVideo(self):
-        self.capture_to_video = False
-        self.video_writer.finish_file()
-        self.updateControls()
-
-    def onCodecProperties(self):
-        dlg = ic4.pyside6.PropertyDialog(self.video_writer.property_map, self, "Codec Settings")
-        # set default vis
-        if dlg.exec() == 1:
-            self.video_writer.property_map.serialize_to_file(self.codec_config_file)
 
     def startStopStream(self):
         try:
@@ -610,24 +556,49 @@ class MainWindow(QMainWindow):
             #self.backgrounds_directory = QFileInfo(full_path).absolutePath()
 
     def save_background(self, image_buffer: ic4.ImageBuffer):
-        name = datetime.now().strftime("background_%m-%d_%H-%M-%S")
+        name = f"{self.relpos[2]}Z_{self.relpos[0]}X_{self.relpos[1]}Y"
         image_buffer.save_as_tiff(self.backgrounds_directory + os.sep + f"{name}.tif")
 
     def toggle_background_subtraction(self):
         self.subtract_background = not self.subtract_background
     
-    def toggle_roi_mode(self):
-        self.video_view.roi_mode = not self.video_view.roi_mode
     
-    def move_z(self, sign: int):
-        amount = sign*0.1
-        # z_pos = self.mmc.get_position(self.z_stage)
-        # print(z_pos)
-        # self.mmc.set_position(self.z_stage, z_pos + amount)
-        
+    def take_sequence(self):
+        distance = 10
+        positions = np.array([[0,0], [1,0], [1,1], [0,1]])*distance
+        anchor = np.array(self.mmc.getXYPosition(self.xy_stage))
+        for position in positions:
+            pos = position + anchor
+            self.relpos[:2] = position
+            self.mmc.setXYPosition(pos[0], pos[1])
+            self.mmc.waitForDevice(self.xy_stage)
+            self.onShootBG()
+            self.shoot_bg = True
+            while self.shoot_bg:
+                pass
+        self.mmc.setXYPosition(anchor[0], anchor[1])
 
-    def update_frame(self, frame):
-        self.new_frame.emit(frame)
+    def start_aquisistion(self):
+        with self.aquiring_mutex:
+            if not self.aquiring:
+                self.aquiring = True
+                self.aquisition_worker = AquisitionThread(self.mmc, self.take_sequence)
+                self.aquisition_worker.finished.connect(self.finish_aquisition)
+                self.aquisition_worker.start()
+
+    def finish_aquisition(self):
+        self.aquiring = False
+
+    def updateroi(self):
+        roi = self.video_view.get_roi()
+        self.video_view.roi = None
+        width = roi[2] - roi[0]
+        height = roi[3] - roi[1]
+        self.device_property_map.set_value(ic4.PropId.OFFSET_AUTO_CENTER, "Off")
+        self.device_property_map.set_value(ic4.PropId.WIDTH, int(width))
+        self.device_property_map.set_value(ic4.PropId.HEIGHT, int(height))
+        self.device_property_map.set_value(ic4.PropId.OFFSET_X, int(roi[0]))
+        self.device_property_map.set_value(ic4.PropId.OFFSET_Y, int(roi[1]))
     
-    def update_pixmap(self, frame):
-        self.video_view.update_image(frame)
+    def update_pixmap(self, frame, roi):
+        self.video_view.update_image(frame, roi)
