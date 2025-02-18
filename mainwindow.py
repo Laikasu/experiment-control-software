@@ -37,7 +37,7 @@ class AquisitionThread(QThread):
         
 
 class MainWindow(QMainWindow):
-    new_frame = Signal(np.ndarray, tuple)
+    new_frame = Signal(np.ndarray)
     def __init__(self):
         application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
         QMainWindow.__init__(self)
@@ -87,6 +87,7 @@ class MainWindow(QMainWindow):
         self.grabber.event_add_device_lost(lambda g: QApplication.postEvent(self, QEvent(DEVICE_LOST_EVENT)))
 
         self.video_view = VideoView(self)
+        self.video_view.roi_set.connect(self.update_roi)
         self.new_frame.connect(self.update_pixmap)
 
         self.background = None
@@ -117,29 +118,11 @@ class MainWindow(QMainWindow):
                 buffer = buf.numpy_copy()
                 # Visible area
                 bounds = self.video_view.get_bounds()
-                roi = self.video_view.get_roi()
-                
-
-                # intersection of visible area and roi
-                if roi is not None:
-                    roi_index = np.index_exp[roi[1]:roi[3], roi[0]:roi[2]]
-                    bounds[0] = max(bounds[0], roi[0])
-                    bounds[1] = max(bounds[1], roi[1])
-                    bounds[2] = min(bounds[2], roi[2])
-                    bounds[3] = min(bounds[3], roi[3])
 
                 region = np.index_exp[bounds[1]:bounds[3], bounds[0]:bounds[2]]
                 
                 if (self.subtract_background):
-                    #roi = self.video_view.mapToScene(self.video_view.viewport().rect()).boundingRect().getCoords()
                     if (self.background is not None):
-                        # Only subtract in visible area: increases performance a lot!
-
-                        
-                        
-                        
-                        #cv2.subtract(buffer, self.background, buffer)
-
                         # (reference + signal) / reference
                         diff = np.divide(np.subtract(buffer[region], self.background[region], dtype=np.int32), self.background[region], dtype=np.float64)
                         diff = np.clip(diff, -1, 1)
@@ -147,21 +130,8 @@ class MainWindow(QMainWindow):
                             buffer[region] = ((diff+1)*127).astype(np.uint8)
                         elif (buffer.dtype == np.uint16):
                             buffer[region] = ((diff+1)*32767).astype(np.uint16)
-                        
-                        #np.copyto(buffer, (diff*127 + 127).astype(np.uint8))
-
-                        #buffer[np.abs(diff)>10] = 0
                 
-                    
-                    #np.copyto(buffer[:,:,0], dpos, where=(dpos != 0))
-                    #np.copyto(buffer[:,:,2], dneg, where=(dneg != 0))
-                    
-                    #cv2.subtract(buffer, self.background, buffer)
-                
-                if roi is None:
-                    self.new_frame.emit(buffer, roi)
-                else:
-                    self.new_frame.emit(buffer[roi_index], roi)
+                self.new_frame.emit(buffer)
                 # Connect the buffer's chunk data to the device's property map
                 # This allows for properties backed by chunk data to be updated
                 self.device_property_map.connect_chunkdata(buf)
@@ -237,7 +207,7 @@ class MainWindow(QMainWindow):
 
         self.select_background_act = QAction("Select &Backgrounds", self)
         self.select_background_act.setStatusTip("Select background images")
-        self.select_background_act.triggered.connect(self.updateroi)
+        self.select_background_act.triggered.connect(self.select_background)
 
         self.save_background_act = QAction("&Save Background", self)
         self.save_background_act.setStatusTip("Save background image")
@@ -427,6 +397,8 @@ class MainWindow(QMainWindow):
 
     def onDeviceOpened(self):
         self.device_property_map = self.grabber.device_property_map
+
+        self.device_property_map.set_value(ic4.PropId.OFFSET_AUTO_CENTER, "Off")
         self.video_view.set_size(
             self.device_property_map.get_value_int(ic4.PropId.WIDTH_MAX),
             self.device_property_map.get_value_int(ic4.PropId.HEIGHT_MAX),
@@ -480,8 +452,6 @@ class MainWindow(QMainWindow):
             if self.grabber.is_device_valid:
                 if self.grabber.is_streaming:
                     self.grabber.stream_stop()
-                    if self.capture_to_video:
-                        self.onStopCaptureVideo()
                 else:
                     self.grabber.stream_setup(self.sink)
 
@@ -589,16 +559,20 @@ class MainWindow(QMainWindow):
     def finish_aquisition(self):
         self.aquiring = False
 
-    def updateroi(self):
-        roi = self.video_view.get_roi()
-        self.video_view.roi = None
-        width = roi[2] - roi[0]
-        height = roi[3] - roi[1]
-        self.device_property_map.set_value(ic4.PropId.OFFSET_AUTO_CENTER, "Off")
-        self.device_property_map.set_value(ic4.PropId.WIDTH, int(width))
-        self.device_property_map.set_value(ic4.PropId.HEIGHT, int(height))
-        self.device_property_map.set_value(ic4.PropId.OFFSET_X, int(roi[0]))
-        self.device_property_map.set_value(ic4.PropId.OFFSET_Y, int(roi[1]))
+    def update_roi(self):
+        # Go out of roi mode in UI
+        self.set_roi_act.setChecked(False)
+
+
+        # Implement ROI in camera
+        roi = self.video_view.roi
+        print(roi.width(), roi.height(), roi.left(), roi.top())
+        self.startStopStream()
+        self.device_property_map.set_value(ic4.PropId.WIDTH, int(roi.width()))
+        self.device_property_map.set_value(ic4.PropId.HEIGHT, int(roi.height()))
+        self.device_property_map.set_value(ic4.PropId.OFFSET_X, int(roi.left()))
+        self.device_property_map.set_value(ic4.PropId.OFFSET_Y, int(roi.top()))
+        self.startStopStream()
     
-    def update_pixmap(self, frame, roi):
-        self.video_view.update_image(frame, roi)
+    def update_pixmap(self, frame):
+        self.video_view.update_image(frame)
