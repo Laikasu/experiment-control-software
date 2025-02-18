@@ -3,4 +3,3 @@ imagingcontrol4pyside6
 opencv-python
 numpy
 pymmcore-plus
-tifffile

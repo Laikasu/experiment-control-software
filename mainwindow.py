@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 import numpy as np
 import time
-import tifffile
+import cv2
 
 from pymmcore_plus import CMMCorePlus
 
@@ -17,12 +17,12 @@ import imagingcontrol4 as ic4
 from videoview import VideoView
 
 
-GOT_PHOTO_EVENT = QEvent.Type(QEvent.Type.User + 1)
+got_processed_photo_EVENT = QEvent.Type(QEvent.Type.User + 1)
 DEVICE_LOST_EVENT = QEvent.Type(QEvent.Type.User + 2)
 
 class GotPhotoEvent(QEvent):
     def __init__(self, buffer: ic4.ImageBuffer):
-        QEvent.__init__(self, GOT_PHOTO_EVENT)
+        QEvent.__init__(self, got_processed_photo_EVENT)
         self.image_buffer = buffer
 
 class AquisitionThread(QThread):
@@ -91,7 +91,6 @@ class MainWindow(QMainWindow):
         self.new_frame.connect(self.update_pixmap)
 
         self.background: np.ndarray = None
-        self.backgrounds: np.ndarray = None
         self.subtract_background = False
 
         class Listener(ic4.QueueSinkListener):
@@ -208,13 +207,17 @@ class MainWindow(QMainWindow):
         self.snap_background_act.setStatusTip("Snap background image")
         self.snap_background_act.triggered.connect(self.snap_background)
 
-        self.snap_raw_image_act = QAction("Snap Raw Image", self)
-        self.snap_raw_image_act.setStatusTip("Snap a single raw image")
-        self.snap_raw_image_act.triggered.connect(self.snap_raw_image)
+        self.snap_raw_photo_act = QAction("Snap Raw Photo", self)
+        self.snap_raw_photo_act.setStatusTip("Snap a single raw photo")
+        self.snap_raw_photo_act.triggered.connect(self.snap_raw_photo)
 
-        self.snap_image_act = QAction("Snap Image")
-        self.snap_image_act.setStatusTip("Snap a single background subtracted image")
-        self.snap_image_act.triggered.connect(self.snap_image)
+        self.snap_processed_photo_act = QAction("Snap Photo")
+        self.snap_processed_photo_act.setStatusTip("Snap a single background subtracted photo")
+        self.snap_processed_photo_act.triggered.connect(self.snap_processed_photo)
+
+        self.z_sweep_act = QAction("Focus Sweep")
+        self.z_sweep_act.setStatusTip("Perform a focus sweep")
+        self.z_sweep_act.triggered.connect(self.z_sweep)
 
 
         exit_act = QAction("E&xit", self)
@@ -239,8 +242,9 @@ class MainWindow(QMainWindow):
         device_menu.addAction(self.close_device_act)
 
         capture_menu = self.menuBar().addMenu("&Capture")
-        capture_menu.addAction(self.snap_raw_image_act)
-        capture_menu.addAction(self.snap_image_act)
+        capture_menu.addAction(self.snap_raw_photo_act)
+        capture_menu.addAction(self.snap_processed_photo_act)
+        capture_menu.addAction(self.z_sweep_act)
         capture_menu.addAction(self.snap_background_act)
         capture_menu.addAction(self.background_subtraction_act)
         capture_menu.addAction(self.set_roi_act)
@@ -264,8 +268,9 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.set_roi_act)
         toolbar.addSeparator()
         toolbar.addAction(self.snap_background_act)
-        toolbar.addAction(self.snap_raw_image_act)
-        toolbar.addAction(self.snap_image_act)
+        toolbar.addAction(self.snap_raw_photo_act)
+        toolbar.addAction(self.snap_processed_photo_act)
+        toolbar.addAction(self.z_sweep_act)
 
 
 
@@ -308,7 +313,7 @@ class MainWindow(QMainWindow):
     def customEvent(self, ev: QEvent):
         if ev.type() == DEVICE_LOST_EVENT:
             self.onDeviceLost()
-        elif ev.type() == GOT_PHOTO_EVENT:
+        elif ev.type() == got_processed_photo_EVENT:
             self.got_image(ev.image_buffer)
             
 
@@ -418,8 +423,9 @@ class MainWindow(QMainWindow):
         self.shoot_photo_act.setEnabled(self.grabber.is_streaming and not aquiring)
         self.close_device_act.setEnabled(self.grabber.is_device_open and not aquiring)
         self.snap_background_act.setEnabled(self.grabber.is_streaming and not aquiring)
-        self.snap_image_act.setEnabled(self.grabber.is_streaming and not aquiring)
-        self.snap_raw_image_act.setEnabled(self.grabber.is_streaming and not aquiring)
+        self.snap_processed_photo_act.setEnabled(self.grabber.is_streaming and not aquiring)
+        self.snap_raw_photo_act.setEnabled(self.grabber.is_streaming and not aquiring)
+        self.z_sweep_act.setEnabled(self.grabber.is_streaming and not aquiring)
 
         self.updateTriggerControl(None)
 
@@ -461,12 +467,12 @@ class MainWindow(QMainWindow):
     # Functions to take raw images and aquisitions
     
     # Snap and save raw image
-    def snap_raw_image(self):
-        self.got_image = self.got_raw_image
+    def snap_raw_photo(self):
+        self.got_image = self.got_raw_photo
         with self.shoot_photo_mutex:
             self.shoot_photo = True
     
-    def got_raw_image(self, image_buffer: ic4.ImageBuffer):        
+    def got_raw_photo(self, image_buffer: ic4.ImageBuffer):        
         dialog = QFileDialog(self, "Save Photo", filters=["TIFF (*.tif)"])
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
@@ -486,7 +492,7 @@ class MainWindow(QMainWindow):
 
     # Snap a sequence of images in a grid to calculate the background and save it.
     def snap_background(self):
-        self.backgrounds = np.zeros((4, self.height, self.width))
+        self.photos = np.zeros((4, self.height, self.width))
         self.got_image = self.got_background
         with self.aquiring_mutex:
             if not self.aquiring:
@@ -499,28 +505,28 @@ class MainWindow(QMainWindow):
     
 
     def got_background(self, image_buffer: ic4.ImageBuffer):
-        self.backgrounds[xy_position] = image_buffer.numpy_wrap()
+        self.photos[xy_position] = image_buffer.numpy_wrap()
 
 
     def update_background(self):
-        self.background = difference_weighted_average(self.backgrounds)
+        self.background = difference_weighted_average(self.photos)
 
-    def snap_image(self):
+    def snap_processed_photo(self):
         self.photos = np.zeros((4, self.height, self.width))
-        self.got_image = self.got_photo
+        self.got_image = self.got_processed_photo
         with self.aquiring_mutex:
             if not self.aquiring:
                 self.aquiring = True
                 self.aquisition_worker = AquisitionThread(self.mmc, self.take_sequence)
-                self.aquisition_worker.finished.connect(self.save_photo)
+                self.aquisition_worker.finished.connect(self.save_processed_photo)
                 self.aquisition_worker.finished.connect(self.finish_aquisition)
                 self.aquisition_worker.start()
         self.updateControls()
 
-    def got_photo(self, image_buffer: ic4.ImageBuffer):
+    def got_processed_photo(self, image_buffer: ic4.ImageBuffer):
         self.photos[xy_position] = image_buffer.numpy_wrap()
     
-    def save_photo(self):
+    def save_processed_photo(self):
         dialog = QFileDialog(self, "Save Photo", filters=["TIFF (*.tif)"])
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
@@ -541,16 +547,48 @@ class MainWindow(QMainWindow):
                 elif (data.dtype == np.uint16):
                     result = ((diff+1)*32767).astype(np.uint16)
                 # also contains raw data
-                tifffile.imwrite(full_path, np.vstack((result, self.photos)))
+                cv2.imwrite(full_path, result)
+                np.save(os.path.splitext(full_path)[0], photos)
                 
             except ic4.IC4Exception as e:
                 QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
+
+    
+    def z_sweep(self):
+        self.got_image = self.got_sweep_photo
+        with self.aquiring_mutex:
+            if not self.aquiring:
+                self.aquiring = True
+                self.aquisition_worker = AquisitionThread(self.mmc, self.take_z_sweep)
+                self.aquisition_worker.finished.connect(self.finish_aquisition)
+                self.aquisition_worker.start()
+        self.updateControls()
+    
+    def got_sweep_photo():
+        self.photos[xy_position] = image_buffer.numpy_wrap()
+
+    def save_z_photos():
+        np.save(os.join(self.data_directory, f"zsweep_{self.z_position}"), photos)
 
 
     def toggle_background_subtraction(self):
         self.subtract_background = not self.subtract_background
     
-    
+    def take_z_sweep(self):
+        z_zero = np.array(self.mmc.getZPosition(self.z_stage))
+        for i, z in enumerate(np.linspace(-5, 5, 20)):
+            self.photos = np.zeros((4, self.height, self.width))
+            pos = z_zero + z
+            self.z_position = i
+            self.mmc.setZPosition(pos)
+            self.mmc.waitForDevice(self.z_stage)
+            take_sequence()
+            save_z_photos()
+        
+        self.mmc.setZPosition(z_zero)
+
+
+
     def take_sequence(self):
         distance = 10
         positions = np.array([[0,0], [1,0], [1,1], [0,1]])*distance
