@@ -460,7 +460,7 @@ class MainWindow(QMainWindow):
                     output_weights[i] = np.maximum(weight, output_weights[i])
                     output_weights[j] = np.maximum(weight, output_weights[j])
         
-        return output_weights
+        return np.average(backgrounds, axis=0, weights=output_weights).astype(backgrounds[0].dtype)
     
 
     # Functions to take raw images and aquisitions
@@ -509,9 +509,7 @@ class MainWindow(QMainWindow):
 
 
     def update_background(self):
-        pass
-        # difference weighted average is an input to weights
-        #self.background = np.weights(self.difference_weighted_average(self.photos), self.photos)
+        self.background = self.difference_weighted_average(self.photos)
 
     def snap_processed_photo(self):
         self.photos = np.zeros((4, self.height, self.width))
