@@ -78,7 +78,7 @@ class MainWindow(QMainWindow):
 
         self.shoot_photo_mutex = Lock()
         self.shoot_photo = False
-        self.got_image = got_raw_image()
+        self.got_image = self.got_raw_photo
 
         self.aquiring = False
         self.aquiring_mutex = Lock()
@@ -416,16 +416,15 @@ class MainWindow(QMainWindow):
         if not self.grabber.is_device_open:
             self.statistics_label.clear()
 
-        self.device_properties_act.setEnabled(self.grabber.is_device_valid and not aquiring)
-        self.device_driver_properties_act.setEnabled(self.grabber.is_device_valid and not aquiring)
-        self.start_live_act.setEnabled(self.grabber.is_device_valid and not aquiring)
+        self.device_properties_act.setEnabled(self.grabber.is_device_valid and not self.aquiring)
+        self.device_driver_properties_act.setEnabled(self.grabber.is_device_valid and not self.aquiring)
+        self.start_live_act.setEnabled(self.grabber.is_device_valid and not self.aquiring)
         self.start_live_act.setChecked(self.grabber.is_streaming)
-        self.shoot_photo_act.setEnabled(self.grabber.is_streaming and not aquiring)
-        self.close_device_act.setEnabled(self.grabber.is_device_open and not aquiring)
-        self.snap_background_act.setEnabled(self.grabber.is_streaming and not aquiring)
-        self.snap_processed_photo_act.setEnabled(self.grabber.is_streaming and not aquiring)
-        self.snap_raw_photo_act.setEnabled(self.grabber.is_streaming and not aquiring)
-        self.z_sweep_act.setEnabled(self.grabber.is_streaming and not aquiring)
+        self.close_device_act.setEnabled(self.grabber.is_device_open and not self.aquiring)
+        self.snap_background_act.setEnabled(self.grabber.is_streaming and not self.aquiring)
+        self.snap_processed_photo_act.setEnabled(self.grabber.is_streaming and not self.aquiring)
+        self.snap_raw_photo_act.setEnabled(self.grabber.is_streaming and not self.aquiring)
+        self.z_sweep_act.setEnabled(self.grabber.is_streaming and not self.aquiring)
 
         self.updateTriggerControl(None)
 
@@ -473,7 +472,8 @@ class MainWindow(QMainWindow):
             self.shoot_photo = True
     
     def got_raw_photo(self, image_buffer: ic4.ImageBuffer):        
-        dialog = QFileDialog(self, "Save Photo", filters=["TIFF (*.tif)"])
+        dialog = QFileDialog(self, "Save Photo")
+        dialog.setNameFilter("TIFF (*.tif)")
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         dialog.setDirectory(self.data_directory)
@@ -492,7 +492,7 @@ class MainWindow(QMainWindow):
 
     # Snap a sequence of images in a grid to calculate the background and save it.
     def snap_background(self):
-        self.photos = np.zeros((4, self.height, self.width))
+        self.photos = np.zeros((4, self.height, self.width, 1), dtype=np.uint16)
         self.got_image = self.got_background
         with self.aquiring_mutex:
             if not self.aquiring:
@@ -505,11 +505,13 @@ class MainWindow(QMainWindow):
     
 
     def got_background(self, image_buffer: ic4.ImageBuffer):
-        self.photos[xy_position] = image_buffer.numpy_wrap()
+        self.photos[self.xy_position] = image_buffer.numpy_wrap()
 
 
     def update_background(self):
-        self.background = difference_weighted_average(self.photos)
+        pass
+        # difference weighted average is an input to weights
+        #self.background = np.weights(self.difference_weighted_average(self.photos), self.photos)
 
     def snap_processed_photo(self):
         self.photos = np.zeros((4, self.height, self.width))
@@ -524,10 +526,11 @@ class MainWindow(QMainWindow):
         self.updateControls()
 
     def got_processed_photo(self, image_buffer: ic4.ImageBuffer):
-        self.photos[xy_position] = image_buffer.numpy_wrap()
+        self.photos[self.xy_position] = image_buffer.numpy_wrap()
     
     def save_processed_photo(self):
-        dialog = QFileDialog(self, "Save Photo", filters=["TIFF (*.tif)"])
+        dialog = QFileDialog(self, "Save Photo")
+        dialog.setNameFilter("TIFF (*.tif)")
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         dialog.setDirectory(self.data_directory)
@@ -539,16 +542,16 @@ class MainWindow(QMainWindow):
             self.data_directory = QFileInfo(full_path).absolutePath()
 
             try:
-                background = self.difference_weighted_average(photos)
-                data = photos[0]
-                diff = np.divide(np.subtract(photos[0], data, dtype=np.int32), background)
+                background = self.difference_weighted_average(self.photos)
+                data = self.photos[0]
+                diff = np.divide(np.subtract(self.photos[0], data, dtype=np.int32), background)
                 if (data.dtype == np.uint8):
                     result = ((diff+1)*127).astype(np.uint8)
                 elif (data.dtype == np.uint16):
                     result = ((diff+1)*32767).astype(np.uint16)
                 # also contains raw data
                 cv2.imwrite(full_path, result)
-                np.save(os.path.splitext(full_path)[0], photos)
+                np.save(os.path.splitext(full_path)[0], self.photos)
                 
             except ic4.IC4Exception as e:
                 QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
@@ -564,11 +567,11 @@ class MainWindow(QMainWindow):
                 self.aquisition_worker.start()
         self.updateControls()
     
-    def got_sweep_photo():
-        self.photos[xy_position] = image_buffer.numpy_wrap()
+    def got_sweep_photo(self, image_buffer: ic4.ImageBuffer):
+        self.photos[self.xy_position] = image_buffer.numpy_wrap()
 
-    def save_z_photos():
-        np.save(os.join(self.data_directory, f"zsweep_{self.z_position}"), photos)
+    def save_z_photos(self):
+        np.save(os.join(self.data_directory, f"zsweep_{self.z_position}"), self.photos)
 
 
     def toggle_background_subtraction(self):
@@ -582,8 +585,8 @@ class MainWindow(QMainWindow):
             self.z_position = i
             self.mmc.setZPosition(pos)
             self.mmc.waitForDevice(self.z_stage)
-            take_sequence()
-            save_z_photos()
+            self.take_sequence()
+            self.save_z_photos()
         
         self.mmc.setZPosition(z_zero)
 
