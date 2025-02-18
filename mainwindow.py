@@ -7,9 +7,9 @@ from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QF
 
 import os
 from datetime import datetime
-import cv2
 import numpy as np
 import time
+import tifffile
 
 from pymmcore_plus import CMMCorePlus
 
@@ -26,14 +26,14 @@ class GotPhotoEvent(QEvent):
         self.image_buffer = buffer
 
 class AquisitionThread(QThread):
-    finished = Signal(str)
+    finished = Signal()
     def __init__(self, mmc, aquisitionfunc):
         super().__init__()
         self.mmc = mmc
         self.func = aquisitionfunc
     def run(self):
         self.func()
-        self.finished.emit("Complete")
+        self.finished.emit()
         
 
 class MainWindow(QMainWindow):
@@ -49,7 +49,7 @@ class MainWindow(QMainWindow):
         mm_dir = "C:/Program Files/Micro-Manager-2.0"
         self.mmc = CMMCorePlus.instance()
         self.mmc.setDeviceAdapterSearchPaths([mm_dir])
-        self.relpos = np.array([0, 0, 0], dtype=np.int16)
+        self.xy_position = 0
         #self.mmc.loadSystemConfiguration()
         self.mmc.loadSystemConfiguration(os.path.join(application_path, "MMConfig.cfg"))
         self.z_stage = self.mmc.getFocusDevice()
@@ -78,7 +78,7 @@ class MainWindow(QMainWindow):
 
         self.shoot_photo_mutex = Lock()
         self.shoot_photo = False
-        self.shoot_bg = False
+        self.got_image = got_raw_image()
 
         self.aquiring = False
         self.aquiring_mutex = Lock()
@@ -90,9 +90,9 @@ class MainWindow(QMainWindow):
         self.video_view.roi_set.connect(self.update_roi)
         self.new_frame.connect(self.update_pixmap)
 
-        self.background = None
+        self.background: np.ndarray = None
+        self.backgrounds: np.ndarray = None
         self.subtract_background = False
-        self.scale = 1
 
         class Listener(ic4.QueueSinkListener):
             def sink_connected(self, sink: ic4.QueueSink, image_type: ic4.ImageType, min_buffers_required: int) -> bool:
@@ -116,6 +116,7 @@ class MainWindow(QMainWindow):
                         QApplication.postEvent(self, GotPhotoEvent(buf))
                 
                 buffer = buf.numpy_copy()
+
                 # Visible area
                 bounds = self.video_view.get_bounds()
 
@@ -143,15 +144,7 @@ class MainWindow(QMainWindow):
 
         self.property_dialog = None
 
-        self.video_writer = ic4.VideoWriter(ic4.VideoWriterType.MP4_H264)
-
         self.createUI()
-
-        # try:
-        #     self.display = self.video_widget.as_display()
-        #     self.display.set_render_position(ic4.DisplayRenderPosition.STRETCH_CENTER)
-        # except Exception as e:
-        #     QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
 
         if QFileInfo.exists(self.device_file):
             try:
@@ -196,35 +189,32 @@ class MainWindow(QMainWindow):
         self.start_live_act.setCheckable(True)
         self.start_live_act.triggered.connect(self.startStopStream)
 
-        self.shoot_photo_act = QAction(QIcon(application_path + "images/photo.png"), "&Shoot Photo", self)
-        self.shoot_photo_act.setStatusTip("Shoot and save a photo")
-        self.shoot_photo_act.triggered.connect(self.onShootPhoto)
-
         self.close_device_act = QAction("Close", self)
         self.close_device_act.setStatusTip("Close the currently opened device")
         self.close_device_act.setShortcuts(QKeySequence.Close)
         self.close_device_act.triggered.connect(self.onCloseDevice)
-
-        self.select_background_act = QAction("Select &Backgrounds", self)
-        self.select_background_act.setStatusTip("Select background images")
-        self.select_background_act.triggered.connect(self.select_background)
-
-        self.save_background_act = QAction("&Save Background", self)
-        self.save_background_act.setStatusTip("Save background image")
-        self.save_background_act.triggered.connect(self.onShootBG)
-
-        self.background_subtraction_act = QAction("Background Subtraction", self)
-        self.background_subtraction_act.setStatusTip("Toggle background subtraction")
-        self.background_subtraction_act.setCheckable(True)
-        self.background_subtraction_act.triggered.connect(self.toggle_background_subtraction)
 
         self.set_roi_act = QAction("Select ROI", self)
         self.set_roi_act.setStatusTip("Draw a rectangle to set ROI")
         self.set_roi_act.setCheckable(True)
         self.set_roi_act.triggered.connect(self.video_view.toggle_roi_mode)
 
-        self.take_sequence_act = QAction("Take Sequence", self)
-        self.take_sequence_act.triggered.connect(self.start_aquisistion)
+        self.background_subtraction_act = QAction("Background Subtraction", self)
+        self.background_subtraction_act.setStatusTip("Toggle background subtraction")
+        self.background_subtraction_act.setCheckable(True)
+        self.background_subtraction_act.triggered.connect(self.toggle_background_subtraction)
+
+        self.snap_background_act = QAction("&Snap Background", self)
+        self.snap_background_act.setStatusTip("Snap background image")
+        self.snap_background_act.triggered.connect(self.snap_background)
+
+        self.snap_raw_image_act = QAction("Snap Raw Image", self)
+        self.snap_raw_image_act.setStatusTip("Snap a single raw image")
+        self.snap_raw_image_act.triggered.connect(self.snap_raw_image)
+
+        self.snap_image_act = QAction("Snap Image")
+        self.snap_image_act.setStatusTip("Snap a single background subtracted image")
+        self.snap_image_act.triggered.connect(self.snap_image)
 
 
         exit_act = QAction("E&xit", self)
@@ -249,9 +239,9 @@ class MainWindow(QMainWindow):
         device_menu.addAction(self.close_device_act)
 
         capture_menu = self.menuBar().addMenu("&Capture")
-        capture_menu.addAction(self.shoot_photo_act)
-        capture_menu.addAction(self.select_background_act)
-        capture_menu.addAction(self.save_background_act)
+        capture_menu.addAction(self.snap_raw_image_act)
+        capture_menu.addAction(self.snap_image_act)
+        capture_menu.addAction(self.snap_background_act)
         capture_menu.addAction(self.background_subtraction_act)
         capture_menu.addAction(self.set_roi_act)
 
@@ -270,14 +260,12 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addAction(self.start_live_act)
         toolbar.addSeparator()
-        toolbar.addAction(self.shoot_photo_act)
-        toolbar.addSeparator()
-        toolbar.addAction(self.save_background_act)
-        toolbar.addAction(self.select_background_act)
         toolbar.addAction(self.background_subtraction_act)
         toolbar.addAction(self.set_roi_act)
         toolbar.addSeparator()
-        toolbar.addAction(self.take_sequence_act)
+        toolbar.addAction(self.snap_background_act)
+        toolbar.addAction(self.snap_raw_image_act)
+        toolbar.addAction(self.snap_image_act)
 
 
 
@@ -321,11 +309,7 @@ class MainWindow(QMainWindow):
         if ev.type() == DEVICE_LOST_EVENT:
             self.onDeviceLost()
         elif ev.type() == GOT_PHOTO_EVENT:
-            if (self.shoot_bg):
-                self.save_background(ev.image_buffer)
-                self.shoot_bg = False
-            else:
-                self.savePhoto(ev.image_buffer)
+            self.got_image(ev.image_buffer)
             
 
     def onSelectDevice(self):
@@ -357,10 +341,6 @@ class MainWindow(QMainWindow):
             self.device_property_map.set_value(ic4.PropId.TRIGGER_MODE, self.trigger_mode_act.isChecked())
         except ic4.IC4Exception as e:
             QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
-
-    def onShootPhoto(self):
-        with self.shoot_photo_mutex:
-            self.shoot_photo = True
     
     def onShootBG(self):
         with self.shoot_photo_mutex:
@@ -399,6 +379,8 @@ class MainWindow(QMainWindow):
         self.device_property_map = self.grabber.device_property_map
 
         self.device_property_map.set_value(ic4.PropId.OFFSET_AUTO_CENTER, "Off")
+        self.width = self.device_property_map.get_value_int(ic4.PropId.WIDTH)
+        self.height = self.device_property_map.get_value_int(ic4.PropId.HEIGHT)
         self.video_view.set_size(
             self.device_property_map.get_value_int(ic4.PropId.WIDTH_MAX),
             self.device_property_map.get_value_int(ic4.PropId.HEIGHT_MAX),
@@ -429,13 +411,15 @@ class MainWindow(QMainWindow):
         if not self.grabber.is_device_open:
             self.statistics_label.clear()
 
-        self.device_properties_act.setEnabled(self.grabber.is_device_valid)
-        self.device_driver_properties_act.setEnabled(self.grabber.is_device_valid)
-        self.start_live_act.setEnabled(self.grabber.is_device_valid)
+        self.device_properties_act.setEnabled(self.grabber.is_device_valid and not aquiring)
+        self.device_driver_properties_act.setEnabled(self.grabber.is_device_valid and not aquiring)
+        self.start_live_act.setEnabled(self.grabber.is_device_valid and not aquiring)
         self.start_live_act.setChecked(self.grabber.is_streaming)
-        self.shoot_photo_act.setEnabled(self.grabber.is_streaming)
-        self.close_device_act.setEnabled(self.grabber.is_device_open)
-        self.save_background_act.setEnabled(self.grabber.is_streaming)
+        self.shoot_photo_act.setEnabled(self.grabber.is_streaming and not aquiring)
+        self.close_device_act.setEnabled(self.grabber.is_device_open and not aquiring)
+        self.snap_background_act.setEnabled(self.grabber.is_streaming and not aquiring)
+        self.snap_image_act.setEnabled(self.grabber.is_streaming and not aquiring)
+        self.snap_raw_image_act.setEnabled(self.grabber.is_streaming and not aquiring)
 
         self.updateTriggerControl(None)
 
@@ -460,13 +444,30 @@ class MainWindow(QMainWindow):
 
         self.updateControls()
 
-    def savePhoto(self, image_buffer: ic4.ImageBuffer):
-        filters = [
-            "TIFF (*.tif)"
-        ]
+    # Background algorithm
+    def difference_weighted_average(self, backgrounds):
+        output_weights = np.zeros_like(backgrounds, dtype=np.float64)
+        for i in range(len(backgrounds)):
+            for j in range(len(backgrounds)):
+                if (i < j):
+                    diff = np.subtract(backgrounds[i], backgrounds[j], dtype=np.int32)/backgrounds[j]
+                    weight = np.exp(-np.abs(diff)/0.004)
+                    output_weights[i] = np.maximum(weight, output_weights[i])
+                    output_weights[j] = np.maximum(weight, output_weights[j])
         
-        dialog = QFileDialog(self, "Save Photo")
-        dialog.setNameFilters(filters)
+        return output_weights
+    
+
+    # Functions to take raw images and aquisitions
+    
+    # Snap and save raw image
+    def snap_raw_image(self):
+        self.got_image = self.got_raw_image
+        with self.shoot_photo_mutex:
+            self.shoot_photo = True
+    
+    def got_raw_image(self, image_buffer: ic4.ImageBuffer):        
+        dialog = QFileDialog(self, "Save Photo", filters=["TIFF (*.tif)"])
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         dialog.setDirectory(self.data_directory)
@@ -482,52 +483,69 @@ class MainWindow(QMainWindow):
                 
             except ic4.IC4Exception as e:
                 QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
+
+    # Snap a sequence of images in a grid to calculate the background and save it.
+    def snap_background(self):
+        self.backgrounds = np.zeros((4, self.height, self.width))
+        self.got_image = self.got_background
+        with self.aquiring_mutex:
+            if not self.aquiring:
+                self.aquiring = True
+                self.aquisition_worker = AquisitionThread(self.mmc, self.take_sequence)
+                self.aquisition_worker.finished.connect(self.update_background)
+                self.aquisition_worker.finished.connect(self.finish_aquisition)
+                self.aquisition_worker.start()
+        self.updateControls()
     
-    def difference_weighted_average(self, backgrounds):
-        output_weights = np.zeros_like(backgrounds, dtype=np.float64)
-        for i in range(len(backgrounds)):
-            for j in range(len(backgrounds)):
-                if (i < j):
-                    diff = np.subtract(backgrounds[i], backgrounds[j], dtype=np.int32)/backgrounds[j]
-                    weight = np.exp(-np.abs(diff)/0.004)
-                    output_weights[i] = np.maximum(weight, output_weights[i])
-                    output_weights[j] = np.maximum(weight, output_weights[j])
-        
-        return output_weights
+
+    def got_background(self, image_buffer: ic4.ImageBuffer):
+        self.backgrounds[xy_position] = image_buffer.numpy_wrap()
+
+
+    def update_background(self):
+        self.background = difference_weighted_average(self.backgrounds)
+
+    def snap_image(self):
+        self.photos = np.zeros((4, self.height, self.width))
+        self.got_image = self.got_photo
+        with self.aquiring_mutex:
+            if not self.aquiring:
+                self.aquiring = True
+                self.aquisition_worker = AquisitionThread(self.mmc, self.take_sequence)
+                self.aquisition_worker.finished.connect(self.save_photo)
+                self.aquisition_worker.finished.connect(self.finish_aquisition)
+                self.aquisition_worker.start()
+        self.updateControls()
+
+    def got_photo(self, image_buffer: ic4.ImageBuffer):
+        self.photos[xy_position] = image_buffer.numpy_wrap()
     
-    def select_background(self, backgrounds):
-        filters = [
-            "TIFF (*.tif)",
-            "Bitmap(*.bmp)",
-            "JPEG (*.jpg)",
-            "Portable Network Graphics (*.png)"
-        ]
-        
-        dialog = QFileDialog(self, "Select Backgrounds")
-        dialog.setNameFilters(filters)
-        dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
-        dialog.setDirectory(self.backgrounds_directory)
+    def save_photo(self):
+        dialog = QFileDialog(self, "Save Photo", filters=["TIFF (*.tif)"])
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setDirectory(self.data_directory)
 
         if dialog.exec():
-            #selected_filter = dialog.selectedNameFilter()
-            #full_path = dialog.selectedFiles()[0]
-            backgrounds = [cv2.imread(image, cv2.IMREAD_ANYDEPTH) for image in dialog.selectedFiles()]
-            # Averaging algorithm
-            if (len(backgrounds) > 1):
-                weights = self.difference_weighted_average(backgrounds)
-                background = np.average(backgrounds, axis=0, weights=weights)
-            elif (len(backgrounds) == 1):
-                background = backgrounds[0]
-            else:
-                return 0
-            self.background = background.astype(backgrounds[0].dtype)[:,:,np.newaxis]
-            #self.video_view.update_image(self.background)
-            #self.backgrounds_directory = QFileInfo(full_path).absolutePath()
+            selected_filter = dialog.selectedNameFilter()
 
-    def save_background(self, image_buffer: ic4.ImageBuffer):
-        name = f"{self.relpos[2]}Z_{self.relpos[0]}X_{self.relpos[1]}Y"
-        image_buffer.save_as_tiff(self.backgrounds_directory + os.sep + f"{name}.tif")
+            full_path = dialog.selectedFiles()[0]
+            self.data_directory = QFileInfo(full_path).absolutePath()
+
+            try:
+                background = self.difference_weighted_average(photos)
+                data = photos[0]
+                diff = np.divide(np.subtract(photos[0], data, dtype=np.int32), background)
+                if (data.dtype == np.uint8):
+                    result = ((diff+1)*127).astype(np.uint8)
+                elif (data.dtype == np.uint16):
+                    result = ((diff+1)*32767).astype(np.uint16)
+                # also contains raw data
+                tifffile.imwrite(full_path, np.vstack((result, self.photos)))
+                
+            except ic4.IC4Exception as e:
+                QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
+
 
     def toggle_background_subtraction(self):
         self.subtract_background = not self.subtract_background
@@ -537,32 +555,28 @@ class MainWindow(QMainWindow):
         distance = 10
         positions = np.array([[0,0], [1,0], [1,1], [0,1]])*distance
         anchor = np.array(self.mmc.getXYPosition(self.xy_stage))
-        for position in positions:
+        for i, position in enumerate(positions):
             pos = position + anchor
-            self.relpos[:2] = position
+            self.xy_position = i
             self.mmc.setXYPosition(pos[0], pos[1])
             self.mmc.waitForDevice(self.xy_stage)
-            self.onShootBG()
-            self.shoot_bg = True
-            while self.shoot_bg:
+            # shoot photo and wait for it to be shot
+            with self.shoot_photo_mutex:
+                self.shoot_photo = True
+            
+            while self.shoot_photo:
                 pass
+        
+        # Return to base
         self.mmc.setXYPosition(anchor[0], anchor[1])
-
-    def start_aquisistion(self):
-        with self.aquiring_mutex:
-            if not self.aquiring:
-                self.aquiring = True
-                self.aquisition_worker = AquisitionThread(self.mmc, self.take_sequence)
-                self.aquisition_worker.finished.connect(self.finish_aquisition)
-                self.aquisition_worker.start()
 
     def finish_aquisition(self):
         self.aquiring = False
+        self.updateControls()
 
     def update_roi(self):
         # Go out of roi mode in UI
         self.set_roi_act.setChecked(False)
-
 
         # Implement ROI in camera
         roi = self.video_view.roi
@@ -573,6 +587,8 @@ class MainWindow(QMainWindow):
         self.device_property_map.set_value(ic4.PropId.OFFSET_X, int(roi.left()))
         self.device_property_map.set_value(ic4.PropId.OFFSET_Y, int(roi.top()))
         self.startStopStream()
+        self.width = roi.width()
+        self.height = roi.height()
     
     def update_pixmap(self, frame):
         self.video_view.update_image(frame)

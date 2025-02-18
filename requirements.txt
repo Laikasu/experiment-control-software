@@ -2,4 +2,5 @@ imagingcontrol4>=1.2.0
 imagingcontrol4pyside6
 opencv-python
 numpy
-pymmcore==10.1.1.70.6
+pymmcore-plus
+tifffile
