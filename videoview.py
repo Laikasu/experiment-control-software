@@ -150,8 +150,8 @@ class VideoView(QGraphicsView):
             if self.roi_mode and self.start_point is not None:
                 # Update the graphic
                 end_point = self.mapToScene(event.pos()).toPoint()
-                end_point.setX(np.round(np.clip(end_point.x(), 0, self.width)/16)*16)
-                end_point.setY(np.round(np.clip(end_point.y(), 0, self.height)/16)*16)
+                end_point.setX(np.round(np.clip(end_point.x(), 0, self.width)/16)*16 - 1)
+                end_point.setY(np.round(np.clip(end_point.y(), 0, self.height)/16)*16 - 1)
                 rect = QRect(self.start_point, end_point).normalized()
                 self.roi_graphic.setRect(rect)
                 # Update roi and turn off roi_mode
@@ -159,7 +159,7 @@ class VideoView(QGraphicsView):
                 self.start_point = None  # Reset start point
                 self.roi_set.emit(rect)
                 self.roi_graphic.hide()
-                self.camera_display.setOffset(self.roi.topLeft())
+                self.camera_display.setOffset(rect.topLeft())
         return super().mouseReleaseEvent(event)
 
 

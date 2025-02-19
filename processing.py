@@ -14,7 +14,7 @@ def common_background(backgrounds):
     for i in range(len(backgrounds)):
         for j in range(len(backgrounds)):
             if (i < j):
-                diff = np.subtract(backgrounds[i], backgrounds[j], dtype=np.int32)/backgrounds[j]
+                diff = np.divide(np.subtract(backgrounds[i], backgrounds[j], dtype=np.int32), backgrounds[j], dtype=np.float64)
                 weight = np.exp(-np.abs(diff)/0.004)
                 output_weights[i] = np.maximum(weight, output_weights[i])
                 output_weights[j] = np.maximum(weight, output_weights[j])

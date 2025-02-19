@@ -28,14 +28,12 @@ class GotPhotoEvent(QEvent):
         self.image_buffer = buffer
 
 class AquisitionThread(QThread):
-    finished = Signal()
     def __init__(self, mmc, aquisitionfunc):
         super().__init__()
         self.mmc = mmc
         self.func = aquisitionfunc
     def run(self):
         self.func()
-        self.finished.emit()
         
 
 class MainWindow(QMainWindow):
@@ -53,7 +51,7 @@ class MainWindow(QMainWindow):
         self.mmc.setDeviceAdapterSearchPaths([mm_dir])
         self.xy_position = 0
         #self.mmc.loadSystemConfiguration()
-        #self.mmc.loadSystemConfiguration(os.path.join(application_path, "MMConfig.cfg"))
+        self.mmc.loadSystemConfiguration(os.path.join(application_path, "MMConfig.cfg"))
         self.z_stage = self.mmc.getFocusDevice()
         self.xy_stage = self.mmc.getXYStageDevice()
         if not self.z_stage:
@@ -80,7 +78,7 @@ class MainWindow(QMainWindow):
 
         self.shoot_photo_mutex = Lock()
         self.shoot_photo = False
-        self.got_image = self.got_raw_photo
+        self.got_image = self.got_single_image
 
         self.aquiring = False
         self.aquiring_mutex = Lock()
@@ -422,10 +420,10 @@ class MainWindow(QMainWindow):
         self.start_live_act.setEnabled(self.grabber.is_device_valid and not self.aquiring)
         self.start_live_act.setChecked(self.grabber.is_streaming)
         self.close_device_act.setEnabled(self.grabber.is_device_open and not self.aquiring)
-        self.snap_background_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.xy_stage)
-        self.snap_processed_photo_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.xy_stage)
+        self.snap_background_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.xy_stage != "")
+        self.snap_processed_photo_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.xy_stage != "")
         self.snap_raw_photo_act.setEnabled(self.grabber.is_streaming and not self.aquiring)
-        self.z_sweep_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.z_stage and self.xy_stage)
+        self.z_sweep_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.z_stage != "" and self.xy_stage != "")
         self.set_roi_act.setEnabled(self.grabber.is_device_valid and not self.aquiring)
         self.subtract_background_act.setEnabled(self.background is not None)
 
@@ -522,7 +520,7 @@ class MainWindow(QMainWindow):
         self.updateControls()
 
     def snap_processed_photo(self):
-        self.photos = np.zeros((4, self.height, self.width, 1))
+        self.photos = np.zeros((4, self.height, self.width, 1), dtype=np.uint16)
         self.got_image = self.got_sequence_image
         with self.aquiring_mutex:
             if not self.aquiring:
@@ -544,17 +542,13 @@ class MainWindow(QMainWindow):
             full_path = dialog.selectedFiles()[0]
             self.data_directory = QFileInfo(full_path).absolutePath()
 
-            try:
-                background = common_background(self.photos)
-                data = self.photos[0]
-                diff = background_subtracted(data, background)
-                # also contains raw data
-                cv2.imwrite(full_path, float_to_mono(diff))
-                np.save(os.path.splitext(full_path)[0] + "_raw.npy", self.photos)
-                np.save(os.path.splitext(full_path)[0] + ".npy", diff)
-                
-            except ic4.IC4Exception as e:
-                QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
+            background = common_background(self.photos)
+            data = self.photos[0]
+            diff = background_subtracted(data, background)
+            # also contains raw data
+            cv2.imwrite(full_path, float_to_mono(diff))
+            np.save(os.path.splitext(full_path)[0] + "_raw.npy", self.photos)
+            np.save(os.path.splitext(full_path)[0] + ".npy", diff)
 
     
     def z_sweep(self):
@@ -568,8 +562,8 @@ class MainWindow(QMainWindow):
         self.updateControls()
     
     def take_z_sweep(self):
-        z_zero = np.array(self.mmc.getZPosition(self.z_stage))
-        N = 20
+        z_zero = self.mmc.getZPosition()
+        N = 5
         z_positions = np.linspace(-5, 5, N)
         
         z_data_raw = np.empty((N, 4, self.height, self.width, 1), dtype=np.uint16)
@@ -584,17 +578,17 @@ class MainWindow(QMainWindow):
             z_data_raw[i] = self.photos
         self.mmc.setZPosition(z_zero)
         self.aquisition_label.setText("Calculating Images")
-        self.startStopStream()
         self.save_z_sweep(z_data_raw)
-        self.startStopStream()
 
     
     def save_z_sweep(self, z_data_raw):
         z_data = np.empty((len(z_data_raw), self.height, self.width, 1), dtype=np.float64)
-        name = os.join(self.data_directory, "z_sweep_1")
-        n = 2
-        while os.path.exists(name + ".npy"):
-            name = f"z_sweep_{n}"
+        name = os.path.join(self.data_directory, "z_sweep_0")
+        n = 1
+        while os.path.isdir(name):
+            name = os.path.join(self.data_directory, f"z_sweep_{n}")
+        
+        os.mkdir(name)
 
         for i in range(len(z_data_raw)):
             photos = z_data_raw[i]
@@ -602,8 +596,7 @@ class MainWindow(QMainWindow):
             data = photos[0]
             diff = background_subtracted(data, background)
             z_data[i] = diff
-            # also contains raw data
-            cv2.imwrite(name + "_{i}.tif", float_to_mono(diff))
+            cv2.imwrite(os.path.join(name, f"z_sweep_{i}.tif"), float_to_mono(diff))
         np.save(name + ".npy", z_data)
         np.save(name + "_raw.npy", z_data_raw)
         self.aquisition_label.setText("")
