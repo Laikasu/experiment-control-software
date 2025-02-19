@@ -2,8 +2,6 @@ from PySide6.QtWidgets import QApplication
 
 import imagingcontrol4 as ic4
 
-import sys
-
 from mainwindow import MainWindow
 
 def main():
