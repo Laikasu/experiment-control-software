@@ -16,6 +16,8 @@ from pymmcore_plus import CMMCorePlus
 import imagingcontrol4 as ic4
 from videoview import VideoView
 
+from processing import *
+
 
 got_processed_photo_EVENT = QEvent.Type(QEvent.Type.User + 1)
 DEVICE_LOST_EVENT = QEvent.Type(QEvent.Type.User + 2)
@@ -51,7 +53,7 @@ class MainWindow(QMainWindow):
         self.mmc.setDeviceAdapterSearchPaths([mm_dir])
         self.xy_position = 0
         #self.mmc.loadSystemConfiguration()
-        self.mmc.loadSystemConfiguration(os.path.join(application_path, "MMConfig.cfg"))
+        #self.mmc.loadSystemConfiguration(os.path.join(application_path, "MMConfig.cfg"))
         self.z_stage = self.mmc.getFocusDevice()
         self.xy_stage = self.mmc.getXYStageDevice()
         if not self.z_stage:
@@ -118,18 +120,14 @@ class MainWindow(QMainWindow):
 
                 # Visible area
                 bounds = self.video_view.get_bounds()
-
                 region = np.index_exp[bounds[1]:bounds[3], bounds[0]:bounds[2]]
                 
                 if (self.subtract_background):
                     if (self.background is not None):
                         # (reference + signal) / reference
-                        diff = np.divide(np.subtract(buffer[region], self.background[region], dtype=np.int32), self.background[region], dtype=np.float64)
-                        diff = np.clip(diff, -1, 1)
-                        if (buffer.dtype == np.uint8):
-                            buffer[region] = ((diff+1)*127).astype(np.uint8)
-                        elif (buffer.dtype == np.uint16):
-                            buffer[region] = ((diff+1)*32767).astype(np.uint16)
+                        diff = background_subtracted(buffer[region], self.background[region])
+                        buffer = float_to_mono(diff)
+                        
                 
                 self.new_frame.emit(buffer)
                 # Connect the buffer's chunk data to the device's property map
@@ -198,10 +196,10 @@ class MainWindow(QMainWindow):
         self.set_roi_act.setCheckable(True)
         self.set_roi_act.triggered.connect(self.video_view.toggle_roi_mode)
 
-        self.background_subtraction_act = QAction("Background Subtraction", self)
-        self.background_subtraction_act.setStatusTip("Toggle background subtraction")
-        self.background_subtraction_act.setCheckable(True)
-        self.background_subtraction_act.triggered.connect(self.toggle_background_subtraction)
+        self.subtract_background_act = QAction("Background Subtraction", self)
+        self.subtract_background_act.setStatusTip("Toggle background subtraction")
+        self.subtract_background_act.setCheckable(True)
+        self.subtract_background_act.triggered.connect(self.toggle_background_subtraction)
 
         self.snap_background_act = QAction("&Snap Background", self)
         self.snap_background_act.setStatusTip("Snap background image")
@@ -236,6 +234,7 @@ class MainWindow(QMainWindow):
         device_menu.addAction(self.device_select_act)
         device_menu.addAction(self.device_properties_act)
         device_menu.addAction(self.device_driver_properties_act)
+        device_menu.addAction(self.set_roi_act)
         device_menu.addAction(self.trigger_mode_act)
         device_menu.addAction(self.start_live_act)
         device_menu.addSeparator()
@@ -246,8 +245,8 @@ class MainWindow(QMainWindow):
         capture_menu.addAction(self.snap_processed_photo_act)
         capture_menu.addAction(self.z_sweep_act)
         capture_menu.addAction(self.snap_background_act)
-        capture_menu.addAction(self.background_subtraction_act)
-        capture_menu.addAction(self.set_roi_act)
+        capture_menu.addAction(self.subtract_background_act)
+        
 
 
 
@@ -264,7 +263,7 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addAction(self.start_live_act)
         toolbar.addSeparator()
-        toolbar.addAction(self.background_subtraction_act)
+        toolbar.addAction(self.subtract_background_act)
         toolbar.addAction(self.set_roi_act)
         toolbar.addSeparator()
         toolbar.addAction(self.snap_background_act)
@@ -278,6 +277,8 @@ class MainWindow(QMainWindow):
         
 
         self.statusBar().showMessage("Ready")
+        self.aquisition_label = QLabel("", self.statusBar())
+        self.statusBar().addPermanentWidget(self.aquisition_label)
         self.statistics_label = QLabel("", self.statusBar())
         self.statusBar().addPermanentWidget(self.statistics_label)
         self.statusBar().addPermanentWidget(QLabel("  "))
@@ -415,16 +416,18 @@ class MainWindow(QMainWindow):
     def updateControls(self):
         if not self.grabber.is_device_open:
             self.statistics_label.clear()
-
+        
         self.device_properties_act.setEnabled(self.grabber.is_device_valid and not self.aquiring)
         self.device_driver_properties_act.setEnabled(self.grabber.is_device_valid and not self.aquiring)
         self.start_live_act.setEnabled(self.grabber.is_device_valid and not self.aquiring)
         self.start_live_act.setChecked(self.grabber.is_streaming)
         self.close_device_act.setEnabled(self.grabber.is_device_open and not self.aquiring)
-        self.snap_background_act.setEnabled(self.grabber.is_streaming and not self.aquiring)
-        self.snap_processed_photo_act.setEnabled(self.grabber.is_streaming and not self.aquiring)
+        self.snap_background_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.xy_stage)
+        self.snap_processed_photo_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.xy_stage)
         self.snap_raw_photo_act.setEnabled(self.grabber.is_streaming and not self.aquiring)
-        self.z_sweep_act.setEnabled(self.grabber.is_streaming and not self.aquiring)
+        self.z_sweep_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.z_stage and self.xy_stage)
+        self.set_roi_act.setEnabled(self.grabber.is_device_valid and not self.aquiring)
+        self.subtract_background_act.setEnabled(self.background is not None)
 
         self.updateTriggerControl(None)
 
@@ -448,19 +451,6 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
 
         self.updateControls()
-
-    # Background algorithm
-    def difference_weighted_average(self, backgrounds):
-        output_weights = np.zeros_like(backgrounds, dtype=np.float64)
-        for i in range(len(backgrounds)):
-            for j in range(len(backgrounds)):
-                if (i < j):
-                    diff = np.subtract(backgrounds[i], backgrounds[j], dtype=np.int32)/backgrounds[j]
-                    weight = np.exp(-np.abs(diff)/0.004)
-                    output_weights[i] = np.maximum(weight, output_weights[i])
-                    output_weights[j] = np.maximum(weight, output_weights[j])
-        
-        return np.average(backgrounds, axis=0, weights=output_weights).astype(backgrounds[0].dtype)
     
 
     # Functions to take raw images and aquisitions
@@ -479,8 +469,6 @@ class MainWindow(QMainWindow):
         dialog.setDirectory(self.data_directory)
 
         if dialog.exec():
-            selected_filter = dialog.selectedNameFilter()
-
             full_path = dialog.selectedFiles()[0]
             self.data_directory = QFileInfo(full_path).absolutePath()
 
@@ -509,10 +497,11 @@ class MainWindow(QMainWindow):
 
 
     def update_background(self):
-        self.background = self.difference_weighted_average(self.photos)
+        self.background = common_background(self.photos)
+        self.updateControls()
 
     def snap_processed_photo(self):
-        self.photos = np.zeros((4, self.height, self.width))
+        self.photos = np.zeros((4, self.height, self.width, 1))
         self.got_image = self.got_processed_photo
         with self.aquiring_mutex:
             if not self.aquiring:
@@ -534,22 +523,16 @@ class MainWindow(QMainWindow):
         dialog.setDirectory(self.data_directory)
 
         if dialog.exec():
-            selected_filter = dialog.selectedNameFilter()
-
             full_path = dialog.selectedFiles()[0]
             self.data_directory = QFileInfo(full_path).absolutePath()
 
             try:
-                background = self.difference_weighted_average(self.photos)
+                background = common_background(self.photos)
                 data = self.photos[0]
-                diff = np.divide(np.subtract(self.photos[0], data, dtype=np.int32), background)
-                if (data.dtype == np.uint8):
-                    result = ((diff+1)*127).astype(np.uint8)
-                elif (data.dtype == np.uint16):
-                    result = ((diff+1)*32767).astype(np.uint16)
+                diff = background_subtracted(data, background)
                 # also contains raw data
-                cv2.imwrite(full_path, result)
-                np.save(os.path.splitext(full_path)[0], self.photos)
+                cv2.imwrite(full_path, float_to_mono(diff))
+                np.save(os.path.splitext(full_path)[0] + ".npy", self.photos)
                 
             except ic4.IC4Exception as e:
                 QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
@@ -577,7 +560,10 @@ class MainWindow(QMainWindow):
     
     def take_z_sweep(self):
         z_zero = np.array(self.mmc.getZPosition(self.z_stage))
-        for i, z in enumerate(np.linspace(-5, 5, 20)):
+        N = 20
+        z_positions = np.linspace(-5, 5, N)
+        for i, z in enumerate(z_positions):
+            self.aquisition_label.setText(f"Aquiring Data: z sweep progression {i+1}/{N}")
             self.photos = np.zeros((4, self.height, self.width))
             pos = z_zero + z
             self.z_position = i
@@ -585,9 +571,27 @@ class MainWindow(QMainWindow):
             self.mmc.waitForDevice(self.z_stage)
             self.take_sequence()
             self.save_z_photos()
-        
         self.mmc.setZPosition(z_zero)
+        self.aquisition_label.setText("Calculating Images")
+        self.startStopStream()
+        self.save_z_sweep(N)
+        self.startStopStream()
 
+    
+    def save_z_sweep(self, length):
+        for i in range(length):
+            name = os.join(self.data_directory, f"zsweep_{i}")
+            photos = np.load(name + ".npy")
+            background = common_background(photos)
+            data = photos[0]
+            diff = np.divide(np.subtract(self.photos[0], data, dtype=np.int32), background)
+            # also contains raw data
+            cv2.imwrite(name + ".tif", float_to_mono(diff))
+        self.aquisition_label.setText("")
+        self.statusBar().showMessage("Done!")
+    
+
+        
 
 
     def take_sequence(self):
@@ -613,13 +617,11 @@ class MainWindow(QMainWindow):
         self.aquiring = False
         self.updateControls()
 
-    def update_roi(self):
+    def update_roi(self, roi):
         # Go out of roi mode in UI
         self.set_roi_act.setChecked(False)
 
-        # Implement ROI in camera
-        roi = self.video_view.roi
-        print(roi.width(), roi.height(), roi.left(), roi.top())
+        # Set ROI in camera
         self.startStopStream()
         self.device_property_map.set_value(ic4.PropId.WIDTH, int(roi.width()))
         self.device_property_map.set_value(ic4.PropId.HEIGHT, int(roi.height()))

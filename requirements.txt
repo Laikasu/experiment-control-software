@@ -1,5 +1,7 @@
-imagingcontrol4>=1.2.0
+pyside6
+imagingcontrol4
 imagingcontrol4pyside6
 opencv-python
 numpy
+qtpy
 pymmcore-plus
