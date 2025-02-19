@@ -457,11 +457,12 @@ class MainWindow(QMainWindow):
     
     # Snap and save raw image
     def snap_raw_photo(self):
-        self.got_image = self.got_raw_photo
+        self.got_image = self.got_single_image
         with self.shoot_photo_mutex:
             self.shoot_photo = True
     
-    def got_raw_photo(self, image_buffer: ic4.ImageBuffer):        
+
+    def got_single_image(self, image_buffer: ic4.ImageBuffer):        
         dialog = QFileDialog(self, "Save Photo")
         dialog.setNameFilter("TIFF (*.tif)")
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
@@ -477,122 +478,7 @@ class MainWindow(QMainWindow):
                 
             except ic4.IC4Exception as e:
                 QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
-
-    # Snap a sequence of images in a grid to calculate the background and save it.
-    def snap_background(self):
-        self.photos = np.zeros((4, self.height, self.width, 1), dtype=np.uint16)
-        self.got_image = self.got_background
-        with self.aquiring_mutex:
-            if not self.aquiring:
-                self.aquiring = True
-                self.aquisition_worker = AquisitionThread(self.mmc, self.take_sequence)
-                self.aquisition_worker.finished.connect(self.update_background)
-                self.aquisition_worker.finished.connect(self.finish_aquisition)
-                self.aquisition_worker.start()
-        self.updateControls()
     
-
-    def got_background(self, image_buffer: ic4.ImageBuffer):
-        self.photos[self.xy_position] = image_buffer.numpy_wrap()
-
-
-    def update_background(self):
-        self.background = common_background(self.photos)
-        self.updateControls()
-
-    def snap_processed_photo(self):
-        self.photos = np.zeros((4, self.height, self.width, 1))
-        self.got_image = self.got_processed_photo
-        with self.aquiring_mutex:
-            if not self.aquiring:
-                self.aquiring = True
-                self.aquisition_worker = AquisitionThread(self.mmc, self.take_sequence)
-                self.aquisition_worker.finished.connect(self.save_processed_photo)
-                self.aquisition_worker.finished.connect(self.finish_aquisition)
-                self.aquisition_worker.start()
-        self.updateControls()
-
-    def got_processed_photo(self, image_buffer: ic4.ImageBuffer):
-        self.photos[self.xy_position] = image_buffer.numpy_wrap()
-    
-    def save_processed_photo(self):
-        dialog = QFileDialog(self, "Save Photo")
-        dialog.setNameFilter("TIFF (*.tif)")
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setDirectory(self.data_directory)
-
-        if dialog.exec():
-            full_path = dialog.selectedFiles()[0]
-            self.data_directory = QFileInfo(full_path).absolutePath()
-
-            try:
-                background = common_background(self.photos)
-                data = self.photos[0]
-                diff = background_subtracted(data, background)
-                # also contains raw data
-                cv2.imwrite(full_path, float_to_mono(diff))
-                np.save(os.path.splitext(full_path)[0] + ".npy", self.photos)
-                
-            except ic4.IC4Exception as e:
-                QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
-
-    
-    def z_sweep(self):
-        self.got_image = self.got_sweep_photo
-        with self.aquiring_mutex:
-            if not self.aquiring:
-                self.aquiring = True
-                self.aquisition_worker = AquisitionThread(self.mmc, self.take_z_sweep)
-                self.aquisition_worker.finished.connect(self.finish_aquisition)
-                self.aquisition_worker.start()
-        self.updateControls()
-    
-    def got_sweep_photo(self, image_buffer: ic4.ImageBuffer):
-        self.photos[self.xy_position] = image_buffer.numpy_wrap()
-
-    def save_z_photos(self):
-        np.save(os.join(self.data_directory, f"zsweep_{self.z_position}"), self.photos)
-
-
-    def toggle_background_subtraction(self):
-        self.subtract_background = not self.subtract_background
-    
-    def take_z_sweep(self):
-        z_zero = np.array(self.mmc.getZPosition(self.z_stage))
-        N = 20
-        z_positions = np.linspace(-5, 5, N)
-        for i, z in enumerate(z_positions):
-            self.aquisition_label.setText(f"Aquiring Data: z sweep progression {i+1}/{N}")
-            self.photos = np.zeros((4, self.height, self.width))
-            pos = z_zero + z
-            self.z_position = i
-            self.mmc.setZPosition(pos)
-            self.mmc.waitForDevice(self.z_stage)
-            self.take_sequence()
-            self.save_z_photos()
-        self.mmc.setZPosition(z_zero)
-        self.aquisition_label.setText("Calculating Images")
-        self.startStopStream()
-        self.save_z_sweep(N)
-        self.startStopStream()
-
-    
-    def save_z_sweep(self, length):
-        for i in range(length):
-            name = os.join(self.data_directory, f"zsweep_{i}")
-            photos = np.load(name + ".npy")
-            background = common_background(photos)
-            data = photos[0]
-            diff = np.divide(np.subtract(self.photos[0], data, dtype=np.int32), background)
-            # also contains raw data
-            cv2.imwrite(name + ".tif", float_to_mono(diff))
-        self.aquisition_label.setText("")
-        self.statusBar().showMessage("Done!")
-    
-
-        
-
 
     def take_sequence(self):
         distance = 10
@@ -612,6 +498,116 @@ class MainWindow(QMainWindow):
         
         # Return to base
         self.mmc.setXYPosition(anchor[0], anchor[1])
+    
+
+    def got_sequence_image(self, image_buffer: ic4.ImageBuffer):
+        self.photos[self.xy_position] = image_buffer.numpy_wrap()
+
+    # Snap a sequence of images in a grid to calculate the background and save it.
+    def snap_background(self):
+        self.photos = np.zeros((4, self.height, self.width, 1), dtype=np.uint16)
+        self.got_image = self.got_sequence_image
+        with self.aquiring_mutex:
+            if not self.aquiring:
+                self.aquiring = True
+                self.aquisition_worker = AquisitionThread(self.mmc, self.take_sequence)
+                self.aquisition_worker.finished.connect(self.update_background)
+                self.aquisition_worker.finished.connect(self.finish_aquisition)
+                self.aquisition_worker.start()
+        self.updateControls()
+
+
+    def update_background(self):
+        self.background = common_background(self.photos)
+        self.updateControls()
+
+    def snap_processed_photo(self):
+        self.photos = np.zeros((4, self.height, self.width, 1))
+        self.got_image = self.got_sequence_image
+        with self.aquiring_mutex:
+            if not self.aquiring:
+                self.aquiring = True
+                self.aquisition_worker = AquisitionThread(self.mmc, self.take_sequence)
+                self.aquisition_worker.finished.connect(self.save_processed_photo)
+                self.aquisition_worker.finished.connect(self.finish_aquisition)
+                self.aquisition_worker.start()
+        self.updateControls()
+    
+    def save_processed_photo(self):
+        dialog = QFileDialog(self, "Save Photo")
+        dialog.setNameFilter("TIFF (*.tif)")
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setDirectory(self.data_directory)
+
+        if dialog.exec():
+            full_path = dialog.selectedFiles()[0]
+            self.data_directory = QFileInfo(full_path).absolutePath()
+
+            try:
+                background = common_background(self.photos)
+                data = self.photos[0]
+                diff = background_subtracted(data, background)
+                # also contains raw data
+                cv2.imwrite(full_path, float_to_mono(diff))
+                np.save(os.path.splitext(full_path)[0] + "_raw.npy", self.photos)
+                np.save(os.path.splitext(full_path)[0] + ".npy", diff)
+                
+            except ic4.IC4Exception as e:
+                QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
+
+    
+    def z_sweep(self):
+        self.got_image = self.got_sequence_image
+        with self.aquiring_mutex:
+            if not self.aquiring:
+                self.aquiring = True
+                self.aquisition_worker = AquisitionThread(self.mmc, self.take_z_sweep)
+                self.aquisition_worker.finished.connect(self.finish_aquisition)
+                self.aquisition_worker.start()
+        self.updateControls()
+    
+    def take_z_sweep(self):
+        z_zero = np.array(self.mmc.getZPosition(self.z_stage))
+        N = 20
+        z_positions = np.linspace(-5, 5, N)
+        
+        z_data_raw = np.empty((N, 4, self.height, self.width, 1), dtype=np.uint16)
+        for i, z in enumerate(z_positions):
+            self.aquisition_label.setText(f"Aquiring Data: z sweep progression {i+1}/{N}")
+            self.photos = np.empty((4, self.height, self.width, 1))
+            pos = z_zero + z
+            self.z_position = i
+            self.mmc.setZPosition(pos)
+            self.mmc.waitForDevice(self.z_stage)
+            self.take_sequence()
+            z_data_raw[i] = self.photos
+        self.mmc.setZPosition(z_zero)
+        self.aquisition_label.setText("Calculating Images")
+        self.startStopStream()
+        self.save_z_sweep(z_data_raw)
+        self.startStopStream()
+
+    
+    def save_z_sweep(self, z_data_raw):
+        z_data = np.empty((len(z_data_raw), self.height, self.width, 1), dtype=np.float64)
+        name = os.join(self.data_directory, "z_sweep_1")
+        n = 2
+        while os.path.exists(name + ".npy"):
+            name = f"z_sweep_{n}"
+
+        for i in range(len(z_data_raw)):
+            photos = z_data_raw[i]
+            background = common_background(photos)
+            data = photos[0]
+            diff = background_subtracted(data, background)
+            z_data[i] = diff
+            # also contains raw data
+            cv2.imwrite(name + "_{i}.tif", float_to_mono(diff))
+        np.save(name + ".npy", z_data)
+        np.save(name + "_raw.npy", z_data_raw)
+        self.aquisition_label.setText("")
+        self.statusBar().showMessage("Done!")
 
     def finish_aquisition(self):
         self.aquiring = False
@@ -630,6 +626,9 @@ class MainWindow(QMainWindow):
         self.startStopStream()
         self.width = roi.width()
         self.height = roi.height()
+    
+    def toggle_background_subtraction(self):
+        self.subtract_background = not self.subtract_background
     
     def update_pixmap(self, frame):
         self.video_view.update_image(frame)
