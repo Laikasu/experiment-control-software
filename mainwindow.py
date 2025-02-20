@@ -51,7 +51,11 @@ class MainWindow(QMainWindow):
         self.mmc.setDeviceAdapterSearchPaths([mm_dir])
         self.xy_position = 0
         #self.mmc.loadSystemConfiguration()
-        self.mmc.loadSystemConfiguration(os.path.join(application_path, "MMConfig.cfg"))
+        try:
+            self.mmc.loadSystemConfiguration(os.path.join(application_path, "MMConfig.cfg"))
+        except:
+             print('failed to load micro manager config')
+        
         self.z_stage = self.mmc.getFocusDevice()
         self.xy_stage = self.mmc.getXYStageDevice()
         if not self.z_stage:
@@ -316,6 +320,10 @@ class MainWindow(QMainWindow):
 
         if self.grabber.is_device_valid:
             self.grabber.device_save_state_to_file(self.device_file)
+        
+        self.update_statistics_timer.stop()
+        del(self.grabber)
+        del(self.sink)
     
     def customEvent(self, ev: QEvent):
         if ev.type() == DEVICE_LOST_EVENT:
