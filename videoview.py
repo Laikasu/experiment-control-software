@@ -8,6 +8,7 @@ import imagingcontrol4 as ic4
 
 class VideoView(QGraphicsView):
     roi_set = Signal(QRect)
+    move_stage = Signal(np.ndarray)
     def __init__(self, parent=None):
         super().__init__(parent)
         self._scene = QGraphicsScene(self)
@@ -33,8 +34,25 @@ class VideoView(QGraphicsView):
 
         self.zoom_factor = 1.25
         self.current_scale = 1.0
-        self.roi_mode = False
         self.start_point = None
+
+        self._mode = "navigation"
+    
+    @property
+    def mode(self) -> str:
+        return self._mode
+    
+    @mode.setter
+    def mode(self, new_mode: str):
+        if (new_mode == "navigation" or new_mode =="move"):
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+        elif (new_mode == "roi"):
+            self.setDragMode(QGraphicsView.NoDrag)
+        else:
+            raise ValueError(f"Unexpected input: mode {new_mode} unknown")
+
+        
+
     
     def set_size(self, width, height, offset_x, offset_y):
         self.width = width
@@ -53,13 +71,6 @@ class VideoView(QGraphicsView):
             self.camera_display.setPixmap(QPixmap.fromImage(QImage(frame.data, width, height, 2*channels*width, QImage.Format_Grayscale16)))
         elif frame.dtype == np.uint8:
             self.camera_display.setPixmap(QPixmap.fromImage(QImage(frame.data, width, height, channels*width, QImage.Format_Grayscale8)))
-
-    def toggle_roi_mode(self):
-        self.roi_mode = not self.roi_mode
-        if self.roi_mode:
-            self.setDragMode(QGraphicsView.NoDrag)
-        else:
-            self.setDragMode(QGraphicsView.ScrollHandDrag)
 
         
 
@@ -125,9 +136,11 @@ class VideoView(QGraphicsView):
         self.setSceneRect(rect)
     
     def mousePressEvent(self, event):
-        if self.roi_mode:
-            # Start drawing a new rectangle
-            if event.button() == Qt.LeftButton:
+        if event.button() == Qt.LeftButton:
+            if self.mode == "move":
+                self.start_point = self.mapToScene(event.pos())
+            if self.mode == "roi":
+                # Start drawing a new rectangle
                 self.start_point = self.mapToScene(event.pos()).toPoint()
                 self.start_point.setX(np.round(np.clip(self.start_point.x(), 0, self.width)/16)*16)
                 self.start_point.setY(np.round(np.clip(self.start_point.y(), 0, self.height)/16)*16)
@@ -136,30 +149,38 @@ class VideoView(QGraphicsView):
             super().mousePressEvent(event)
     
     def mouseMoveEvent(self, event):
-        if self.roi_mode and self.start_point is not None:
-            # Update the graphic
-            end_point = self.mapToScene(event.pos()).toPoint()
-            end_point.setX(np.round(np.clip(end_point.x(), 0, self.width)/16)*16)
-            end_point.setY(np.round(np.clip(end_point.y(), 0, self.height)/16)*16)
-            rect = QRect(self.start_point, end_point).normalized()
-            self.roi_graphic.setRect(rect)
+        if self.start_point is not None:
+            if self.mode == "move":
+                current_point = self.mapToScene(event.pos())
+                displacement = current_point - self.start_point
+                self.start_point = current_point
+                self.move_stage.emit(np.array(displacement.toTuple()))
+
+            if self.mode == "roi":
+                # Update the graphic
+                end_point = self.mapToScene(event.pos()).toPoint()
+                end_point.setX(np.round(np.clip(end_point.x(), 0, self.width)/16)*16)
+                end_point.setY(np.round(np.clip(end_point.y(), 0, self.height)/16)*16)
+                rect = QRect(self.start_point, end_point).normalized()
+                self.roi_graphic.setRect(rect)
         return super().mouseMoveEvent(event)
     
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
-            if self.roi_mode and self.start_point is not None:
-                # Update the graphic
-                end_point = self.mapToScene(event.pos()).toPoint()
-                end_point.setX(np.round(np.clip(end_point.x(), 0, self.width)/16)*16 - 1)
-                end_point.setY(np.round(np.clip(end_point.y(), 0, self.height)/16)*16 - 1)
-                rect = QRect(self.start_point, end_point).normalized()
-                self.roi_graphic.setRect(rect)
-                # Update roi and turn off roi_mode
-                self.toggle_roi_mode()
-                self.start_point = None  # Reset start point
-                self.roi_set.emit(rect)
-                self.roi_graphic.hide()
-                self.camera_display.setOffset(rect.topLeft())
+            if self.start_point is not None:
+                if self.mode == "roi":
+                    # Update the graphic
+                    end_point = self.mapToScene(event.pos()).toPoint()
+                    end_point.setX(np.round(np.clip(end_point.x(), 0, self.width)/16)*16 - 1)
+                    end_point.setY(np.round(np.clip(end_point.y(), 0, self.height)/16)*16 - 1)
+                    rect = QRect(self.start_point, end_point).normalized()
+                    self.roi_graphic.setRect(rect)
+                    # Update roi and turn off roi mode
+                    self.mode = "navigation"
+                    self.start_point = None  # Reset start point
+                    self.roi_set.emit(rect)
+                    self.roi_graphic.hide()
+                    self.camera_display.setOffset(rect.topLeft())
         return super().mouseReleaseEvent(event)
 
 

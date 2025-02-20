@@ -88,6 +88,7 @@ class MainWindow(QMainWindow):
 
         self.video_view = VideoView(self)
         self.video_view.roi_set.connect(self.update_roi)
+        self.video_view.move_stage.connect(self.move_stage)
         self.new_frame.connect(self.update_pixmap)
 
         self.background: np.ndarray = None
@@ -192,7 +193,12 @@ class MainWindow(QMainWindow):
         self.set_roi_act = QAction("Select ROI", self)
         self.set_roi_act.setStatusTip("Draw a rectangle to set ROI")
         self.set_roi_act.setCheckable(True)
-        self.set_roi_act.triggered.connect(self.video_view.toggle_roi_mode)
+        self.set_roi_act.triggered.connect(lambda: self.toggle_mode("roi"))
+
+        self.move_act = QAction("Move", self)
+        self.move_act.setStatusTip("Move the sample by dragging the view")
+        self.move_act.setCheckable(True)
+        self.move_act.triggered.connect(lambda: self.toggle_mode("move"))
 
         self.subtract_background_act = QAction("Background Subtraction", self)
         self.subtract_background_act.setStatusTip("Toggle background subtraction")
@@ -233,6 +239,7 @@ class MainWindow(QMainWindow):
         device_menu.addAction(self.device_properties_act)
         device_menu.addAction(self.device_driver_properties_act)
         device_menu.addAction(self.set_roi_act)
+        device_menu.addAction(self.move_act)
         device_menu.addAction(self.trigger_mode_act)
         device_menu.addAction(self.start_live_act)
         device_menu.addSeparator()
@@ -263,6 +270,7 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addAction(self.subtract_background_act)
         toolbar.addAction(self.set_roi_act)
+        toolbar.addAction(self.move_act)
         toolbar.addSeparator()
         toolbar.addAction(self.snap_background_act)
         toolbar.addAction(self.snap_raw_photo_act)
@@ -425,6 +433,9 @@ class MainWindow(QMainWindow):
         self.snap_raw_photo_act.setEnabled(self.grabber.is_streaming and not self.aquiring)
         self.z_sweep_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.z_stage != "" and self.xy_stage != "")
         self.set_roi_act.setEnabled(self.grabber.is_device_valid and not self.aquiring)
+        self.move_act.setEnabled(self.grabber.is_streaming and not self.aquiring)
+        self.move_act.setChecked(self.video_view.mode == "move")
+        self.set_roi_act.setChecked(self.video_view.mode == "roi")
         self.subtract_background_act.setEnabled(self.background is not None)
 
         self.updateTriggerControl(None)
@@ -597,8 +608,9 @@ class MainWindow(QMainWindow):
             diff = background_subtracted(data, background)
             z_data[i] = diff
             cv2.imwrite(os.path.join(name, f"z_sweep_{i}.tif"), float_to_mono(diff))
-        np.save(name + ".npy", z_data)
-        np.save(name + "_raw.npy", z_data_raw)
+        np.save(os.path.join(name, "data.npy"), z_data)
+        np.save(os.path.join(name, "data_raw.npy"), z_data_raw)
+        #self.device_property_map.get_value_int(ic4.PropId.EXPOSURE_TIME)
         self.aquisition_label.setText("")
         self.statusBar().showMessage("Done!")
 
@@ -607,9 +619,6 @@ class MainWindow(QMainWindow):
         self.updateControls()
 
     def update_roi(self, roi):
-        # Go out of roi mode in UI
-        self.set_roi_act.setChecked(False)
-
         # Set ROI in camera
         self.startStopStream()
         self.device_property_map.set_value(ic4.PropId.WIDTH, int(roi.width()))
@@ -619,9 +628,28 @@ class MainWindow(QMainWindow):
         self.startStopStream()
         self.width = roi.width()
         self.height = roi.height()
+
+        # Go out of roi mode in UI
+        self.updateControls()
     
+    def move_stage(self, displacement: np.ndarray):
+        current_position = np.array(self.mmc.getXYPosition())
+        displacement_micron = 3.45*displacement
+        new_position = current_position + displacement_micron
+        print(new_position)
+        #self.mmc.setXYPosition(new_position[0], new_position[1])
+        #self.mmc.waitForDevice(self.xy_stage)
+
     def toggle_background_subtraction(self):
         self.subtract_background = not self.subtract_background
+    
+    def toggle_mode(self, mode):
+        if self.video_view.mode == mode:
+            self.video_view.mode == "navigation"
+        else:
+            self.video_view.mode == mode
+        self.updateControls()
+        
     
     def update_pixmap(self, frame):
         self.video_view.update_image(frame)
