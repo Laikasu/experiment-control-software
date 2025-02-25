@@ -6,10 +6,8 @@ from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
 
 import os
-from datetime import datetime
 import numpy as np
-import time
-import cv2
+import tifffile as tiff
 
 from pymmcore_plus import CMMCorePlus
 
@@ -27,13 +25,14 @@ class GotPhotoEvent(QEvent):
         QEvent.__init__(self, got_processed_photo_EVENT)
         self.image_buffer = buffer
 
-class AquisitionThread(QThread):
-    def __init__(self, mmc, aquisitionfunc):
+class Worker(QThread):
+    def __init__(self, aquisitionfunc, *args):
         super().__init__()
-        self.mmc = mmc
+        self.args = args
         self.func = aquisitionfunc
+
     def run(self):
-        self.func()
+        self.func(*self.args)
         
 
 class MainWindow(QMainWindow):
@@ -49,7 +48,7 @@ class MainWindow(QMainWindow):
         mm_dir = "C:/Program Files/Micro-Manager-2.0"
         self.mmc = CMMCorePlus.instance()
         self.mmc.setDeviceAdapterSearchPaths([mm_dir])
-        self.xy_position = 0
+        self.photos_received = 0
         #self.mmc.loadSystemConfiguration()
         try:
             self.mmc.loadSystemConfiguration(os.path.join(application_path, "MMConfig.cfg"))
@@ -120,15 +119,11 @@ class MainWindow(QMainWindow):
                         QApplication.postEvent(self, GotPhotoEvent(buf))
                 
                 buffer = buf.numpy_copy()
-
-                # Visible area
-                bounds = self.video_view.get_bounds()
-                region = np.index_exp[bounds[1]:bounds[3], bounds[0]:bounds[2]]
                 
                 if (self.subtract_background):
                     if (self.background is not None):
                         # (reference + signal) / reference
-                        diff = background_subtracted(buffer[region], self.background[region])
+                        diff = background_subtracted(buffer, self.background)
                         buffer = float_to_mono(diff)
                         
                 
@@ -151,6 +146,7 @@ class MainWindow(QMainWindow):
                 self.grabber.device_open_from_state_file(self.device_file)
                 self.onDeviceOpened()
             except ic4.IC4Exception as e:
+
                 QMessageBox.information(self, "", f"Loading last used device failed: {e}", QMessageBox.StandardButton.Ok)
         
         
@@ -324,6 +320,7 @@ class MainWindow(QMainWindow):
         self.update_statistics_timer.stop()
         del(self.grabber)
         del(self.sink)
+        del(self.device_property_map)
     
     def customEvent(self, ev: QEvent):
         if ev.type() == DEVICE_LOST_EVENT:
@@ -399,6 +396,10 @@ class MainWindow(QMainWindow):
         self.device_property_map = self.grabber.device_property_map
 
         self.device_property_map.set_value(ic4.PropId.OFFSET_AUTO_CENTER, "Off")
+        self.device_property_map.set_value(ic4.PropId.GAIN_AUTO, "Off")
+        self.device_property_map.set_value(ic4.PropId.GAIN, 0)
+        self.device_property_map.set_value(ic4.PropId.EXPOSURE_AUTO, "Off")
+        self.device_property_map.set_value(ic4.PropId.PIXEL_FORMAT, "Mono 16")
         self.width = self.device_property_map.get_value_int(ic4.PropId.WIDTH)
         self.height = self.device_property_map.get_value_int(ic4.PropId.HEIGHT)
         self.video_view.set_size(
@@ -501,9 +502,9 @@ class MainWindow(QMainWindow):
         distance = 10
         positions = np.array([[0,0], [1,0], [1,1], [0,1]])*distance
         anchor = np.array(self.mmc.getXYPosition(self.xy_stage))
+        self.photos_received = 0
         for i, position in enumerate(positions):
             pos = position + anchor
-            self.xy_position = i
             self.mmc.setXYPosition(pos[0], pos[1])
             self.mmc.waitForDevice(self.xy_stage)
             # shoot photo and wait for it to be shot
@@ -518,7 +519,8 @@ class MainWindow(QMainWindow):
     
 
     def got_sequence_image(self, image_buffer: ic4.ImageBuffer):
-        self.photos[self.xy_position] = image_buffer.numpy_wrap()
+        self.photos[self.photos_received] = image_buffer.numpy_wrap()
+        self.photos_received += 1
 
     # Snap a sequence of images in a grid to calculate the background and save it.
     def snap_background(self):
@@ -527,7 +529,7 @@ class MainWindow(QMainWindow):
         with self.aquiring_mutex:
             if not self.aquiring:
                 self.aquiring = True
-                self.aquisition_worker = AquisitionThread(self.mmc, self.take_sequence)
+                self.aquisition_worker = Worker(self.take_sequence)
                 self.aquisition_worker.finished.connect(self.update_background)
                 self.aquisition_worker.finished.connect(self.finish_aquisition)
                 self.aquisition_worker.start()
@@ -544,7 +546,7 @@ class MainWindow(QMainWindow):
         with self.aquiring_mutex:
             if not self.aquiring:
                 self.aquiring = True
-                self.aquisition_worker = AquisitionThread(self.mmc, self.take_sequence)
+                self.aquisition_worker = Worker(self.take_sequence)
                 self.aquisition_worker.finished.connect(self.save_processed_photo)
                 self.aquisition_worker.finished.connect(self.finish_aquisition)
                 self.aquisition_worker.start()
@@ -556,16 +558,18 @@ class MainWindow(QMainWindow):
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         dialog.setDirectory(self.data_directory)
-
         if dialog.exec():
             full_path = dialog.selectedFiles()[0]
             self.data_directory = QFileInfo(full_path).absolutePath()
-
+            
             background = common_background(self.photos)
             data = self.photos[0]
+
             diff = background_subtracted(data, background)
+
+            
             # also contains raw data
-            cv2.imwrite(full_path, float_to_mono(diff))
+            tiff.imwrite(full_path, float_to_mono(diff))
             np.save(os.path.splitext(full_path)[0] + "_raw.npy", self.photos)
             np.save(os.path.splitext(full_path)[0] + ".npy", diff)
 
@@ -575,20 +579,20 @@ class MainWindow(QMainWindow):
         with self.aquiring_mutex:
             if not self.aquiring:
                 self.aquiring = True
-                self.aquisition_worker = AquisitionThread(self.mmc, self.take_z_sweep)
+                self.aquisition_worker = Worker(self.take_z_sweep)
                 self.aquisition_worker.finished.connect(self.finish_aquisition)
                 self.aquisition_worker.start()
         self.updateControls()
     
     def take_z_sweep(self):
         z_zero = self.mmc.getZPosition()
-        N = 5
+        N = 100
         z_positions = np.linspace(-5, 5, N)
         
-        z_data_raw = np.empty((N, 4, self.height, self.width, 1), dtype=np.uint16)
+        z_data_raw = np.zeros((N, 4, self.height, self.width, 1), dtype=np.uint16)
         for i, z in enumerate(z_positions):
             self.aquisition_label.setText(f"Aquiring Data: z sweep progression {i+1}/{N}")
-            self.photos = np.empty((4, self.height, self.width, 1))
+            self.photos = np.zeros((4, self.height, self.width, 1))
             pos = z_zero + z
             self.z_position = i
             self.mmc.setZPosition(pos)
@@ -601,7 +605,7 @@ class MainWindow(QMainWindow):
 
     
     def save_z_sweep(self, z_data_raw):
-        z_data = np.empty((len(z_data_raw), self.height, self.width, 1), dtype=np.float64)
+        z_data = np.zeros((len(z_data_raw), self.height, self.width, 1), dtype=np.float64)
         name = os.path.join(self.data_directory, "z_sweep_0")
         n = 1
         while os.path.isdir(name):
@@ -615,7 +619,7 @@ class MainWindow(QMainWindow):
             data = photos[0]
             diff = background_subtracted(data, background)
             z_data[i] = diff
-            cv2.imwrite(os.path.join(name, f"z_sweep_{i}.tif"), float_to_mono(diff))
+            tiff.imwrite(os.path.join(name, f"z_sweep_{i}.tif"), float_to_mono(diff))
         np.save(os.path.join(name, "data.npy"), z_data)
         np.save(os.path.join(name, "data_raw.npy"), z_data_raw)
         #self.device_property_map.get_value_int(ic4.PropId.EXPOSURE_TIME)
@@ -641,21 +645,18 @@ class MainWindow(QMainWindow):
         self.updateControls()
     
     def move_stage(self, displacement: np.ndarray):
-        current_position = np.array(self.mmc.getXYPosition())
-        displacement_micron = 3.45*displacement
-        new_position = current_position + displacement_micron
-        print(new_position)
-        #self.mmc.setXYPosition(new_position[0], new_position[1])
-        #self.mmc.waitForDevice(self.xy_stage)
+        displacement_micron = 3.45*displacement/40
+        self.mmc.setRelativeXYPosition(-displacement_micron[1], -displacement_micron[0])
 
     def toggle_background_subtraction(self):
         self.subtract_background = not self.subtract_background
     
     def toggle_mode(self, mode):
         if self.video_view.mode == mode:
-            self.video_view.mode == "navigation"
+            self.video_view.mode = "navigation"
         else:
-            self.video_view.mode == mode
+            self.video_view.mode = mode
+            
         self.updateControls()
         
     

@@ -13,8 +13,7 @@ class VideoView(QGraphicsView):
         super().__init__(parent)
         self._scene = QGraphicsScene(self)
         self.setDragMode(QGraphicsView.ScrollHandDrag)
-
-        # 
+        
         self.camera_display = QGraphicsPixmapItem()
         self._scene.addItem(self.camera_display)
 
@@ -50,6 +49,7 @@ class VideoView(QGraphicsView):
             self.setDragMode(QGraphicsView.NoDrag)
         else:
             raise ValueError(f"Unexpected input: mode {new_mode} unknown")
+        self._mode = new_mode
 
         
 
@@ -145,8 +145,8 @@ class VideoView(QGraphicsView):
                 self.start_point.setX(np.round(np.clip(self.start_point.x(), 0, self.width)/16)*16)
                 self.start_point.setY(np.round(np.clip(self.start_point.y(), 0, self.height)/16)*16)
                 self.roi_graphic.show()
-        else:
-            super().mousePressEvent(event)
+            if self.mode == "navigation":
+                super().mousePressEvent(event)
     
     def mouseMoveEvent(self, event):
         if self.start_point is not None:
@@ -168,6 +168,8 @@ class VideoView(QGraphicsView):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
             if self.start_point is not None:
+                if self.mode == "move":
+                    self.start_point = None
                 if self.mode == "roi":
                     # Update the graphic
                     end_point = self.mapToScene(event.pos()).toPoint()
