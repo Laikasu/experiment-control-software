@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QF
 import os
 import numpy as np
 import tifffile as tiff
+import time
 
 from pymmcore_plus import CMMCorePlus
 
@@ -507,6 +508,7 @@ class MainWindow(QMainWindow):
             pos = position + anchor
             self.mmc.setXYPosition(pos[0], pos[1])
             self.mmc.waitForDevice(self.xy_stage)
+            time.sleep(0.1)
             # shoot photo and wait for it to be shot
             with self.shoot_photo_mutex:
                 self.shoot_photo = True
@@ -597,6 +599,7 @@ class MainWindow(QMainWindow):
             self.z_position = i
             self.mmc.setZPosition(pos)
             self.mmc.waitForDevice(self.z_stage)
+            time.sleep(0.1)
             self.take_sequence()
             z_data_raw[i] = self.photos
         self.mmc.setZPosition(z_zero)
