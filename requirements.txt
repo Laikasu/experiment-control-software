@@ -1,6 +1,6 @@
 pyside6
+imagingcontrol4pyside6==6.8.0.59rc0
 imagingcontrol4
-imagingcontrol4pyside6
 numpy
 qtpy
 pymmcore-plus

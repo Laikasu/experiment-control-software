@@ -27,13 +27,19 @@ class GotPhotoEvent(QEvent):
         self.image_buffer = buffer
 
 class Worker(QThread):
-    def __init__(self, aquisitionfunc, *args):
+    def __init__(self, func, *args):
         super().__init__()
         self.args = args
-        self.func = aquisitionfunc
+        self.func = func
 
     def run(self):
         self.func(*self.args)
+
+class PersistentWorker(QThread):
+    def __init__(self, func):
+        super().__init__()
+        self.func = func
+
         
 
 class MainWindow(QMainWindow):
@@ -92,7 +98,8 @@ class MainWindow(QMainWindow):
 
         self.video_view = VideoView(self)
         self.video_view.roi_set.connect(self.update_roi)
-        self.video_view.move_stage.connect(self.move_stage)
+        self.move_stage_worker = PersistentWorker(self.move_stage)
+        self.video_view.move_stage.connect(self.move_stage_worker.func)
         self.new_frame.connect(self.update_pixmap)
 
         self.background: np.ndarray = None
@@ -321,7 +328,10 @@ class MainWindow(QMainWindow):
         self.update_statistics_timer.stop()
         del(self.grabber)
         del(self.sink)
-        del(self.device_property_map)
+        try:
+            del(self.device_property_map)
+        except:
+            pass
     
     def customEvent(self, ev: QEvent):
         if ev.type() == DEVICE_LOST_EVENT:
@@ -438,12 +448,12 @@ class MainWindow(QMainWindow):
         self.start_live_act.setEnabled(self.grabber.is_device_valid and not self.aquiring)
         self.start_live_act.setChecked(self.grabber.is_streaming)
         self.close_device_act.setEnabled(self.grabber.is_device_open and not self.aquiring)
-        self.snap_background_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.xy_stage != "")
-        self.snap_processed_photo_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.xy_stage != "")
+        self.snap_background_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.xy_stage)
+        self.snap_processed_photo_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.xy_stage)
         self.snap_raw_photo_act.setEnabled(self.grabber.is_streaming and not self.aquiring)
-        self.z_sweep_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.z_stage != "" and self.xy_stage != "")
+        self.z_sweep_act.setEnabled(self.grabber.is_streaming and not self.aquiring and not not self.z_stage and self.xy_stage)
         self.set_roi_act.setEnabled(self.grabber.is_device_valid and not self.aquiring)
-        self.move_act.setEnabled(self.grabber.is_streaming and not self.aquiring)
+        self.move_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.xy_stage)
         self.move_act.setChecked(self.video_view.mode == "move")
         self.set_roi_act.setChecked(self.video_view.mode == "roi")
         self.subtract_background_act.setEnabled(self.background is not None)
