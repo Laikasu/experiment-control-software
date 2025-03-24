@@ -13,9 +13,9 @@ import time
 from pymmcore_plus import CMMCorePlus
 
 import imagingcontrol4 as ic4
-from videoview import VideoView
+from widgets import VideoView
 
-from processing import *
+import processing as pc
 
 
 got_processed_photo_EVENT = QEvent.Type(QEvent.Type.User + 1)
@@ -40,34 +40,36 @@ class PersistentWorker(QThread):
         super().__init__()
         self.func = func
 
-        
 
 class MainWindow(QMainWindow):
     new_frame = Signal(np.ndarray)
+
     def __init__(self):
         application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
         QMainWindow.__init__(self)
-        self.setWindowIcon(QIcon(application_path + "/images/tis.ico"))
+        self.setWindowIcon(QIcon(application_path + '/images/tis.ico'))
 
         # Setup stage
         # Setup microscope connection
 
-        mm_dir = "C:/Program Files/Micro-Manager-2.0"
+        mm_dir = 'C:/Program Files/Micro-Manager-2.0'
         self.mmc = CMMCorePlus.instance()
         self.mmc.setDeviceAdapterSearchPaths([mm_dir])
         self.photos_received = 0
         #self.mmc.loadSystemConfiguration()
         try:
-            self.mmc.loadSystemConfiguration(os.path.join(application_path, "MMConfig.cfg"))
+            self.mmc.loadSystemConfiguration(os.path.join(application_path, 'MMConfig.cfg'))
         except:
              print('failed to load micro manager config')
         
         self.z_stage = self.mmc.getFocusDevice()
         self.xy_stage = self.mmc.getXYStageDevice()
         if not self.z_stage:
-            print("z_stage not found")
+            print('z_stage not found')
         if not self.xy_stage:
-            print("xy_stage not found")
+            print('xy_stage not found')
+        
+        self.grid = False
 
         
 
@@ -75,20 +77,20 @@ class MainWindow(QMainWindow):
         appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
         picture_directory = QStandardPaths.writableLocation(QStandardPaths.PicturesLocation)
         video_directory = QStandardPaths.writableLocation(QStandardPaths.MoviesLocation)
-        QDir(appdata_directory).mkpath(".")
+        QDir(appdata_directory).mkpath('.')
         
 
-        self.data_directory = picture_directory + "/Data"
-        QDir(self.data_directory).mkpath(".")
-        self.backgrounds_directory = picture_directory + "/Backgrounds"
-        QDir(self.backgrounds_directory).mkpath(".")
+        self.data_directory = picture_directory + '/Data'
+        QDir(self.data_directory).mkpath('.')
+        self.backgrounds_directory = picture_directory + '/Backgrounds'
+        QDir(self.backgrounds_directory).mkpath('.')
         self.save_videos_directory = video_directory
 
-        self.device_file = appdata_directory + "/device.json"
+        self.device_file = appdata_directory + '/device.json'
 
         self.shoot_photo_mutex = Lock()
         self.shoot_photo = False
-        self.got_image = self.got_single_image
+        self.got_image = self.save_single_raw_image
 
         self.aquiring = False
         self.aquiring_mutex = Lock()
@@ -131,8 +133,8 @@ class MainWindow(QMainWindow):
                 if (self.subtract_background):
                     if (self.background is not None):
                         # (reference + signal) / reference
-                        diff = background_subtracted(buffer, self.background)
-                        buffer = float_to_mono(diff)
+                        diff = pc.background_subtracted(buffer, self.background)
+                        buffer = pc.float_to_mono(diff)
                         
                 
                 self.new_frame.emit(buffer)
@@ -155,11 +157,10 @@ class MainWindow(QMainWindow):
                 self.onDeviceOpened()
             except ic4.IC4Exception as e:
 
-                QMessageBox.information(self, "", f"Loading last used device failed: {e}", QMessageBox.StandardButton.Ok)
+                QMessageBox.information(self, '', f'Loading last used device failed: {e}', QMessageBox.StandardButton.Ok)
         
         
         self.updateControls()
-    
     
 
     def createUI(self):
@@ -170,79 +171,84 @@ class MainWindow(QMainWindow):
         #=========#
         application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
         
-        self.device_select_act = QAction(QIcon(application_path + "images/camera.png"), "&Select", self)
-        self.device_select_act.setStatusTip("Select a video capture device")
+        self.device_select_act = QAction(QIcon(application_path + 'images/camera.png'), '&Select', self)
+        self.device_select_act.setStatusTip('Select a video capture device')
         self.device_select_act.setShortcut(QKeySequence.Open)
         self.device_select_act.triggered.connect(self.onSelectDevice)
 
-        self.device_properties_act = QAction(QIcon(application_path + "images/imgset.png"), "&Properties", self)
-        self.device_properties_act.setStatusTip("Show device property dialog")
+        self.device_properties_act = QAction(QIcon(application_path + 'images/imgset.png'), '&Properties', self)
+        self.device_properties_act.setStatusTip('Show device property dialog')
         self.device_properties_act.triggered.connect(self.onDeviceProperties)
 
-        self.device_driver_properties_act = QAction("&Driver Properties", self)
-        self.device_driver_properties_act.setStatusTip("Show device driver property dialog")
+        self.device_driver_properties_act = QAction('&Driver Properties', self)
+        self.device_driver_properties_act.setStatusTip('Show device driver property dialog')
         self.device_driver_properties_act.triggered.connect(self.onDeviceDriverProperties)
 
-        self.trigger_mode_act = QAction(QIcon(application_path + "images/triggermode.png"), "&Trigger Mode", self)
-        self.trigger_mode_act.setStatusTip("Enable and disable trigger mode")
+        self.trigger_mode_act = QAction(QIcon(application_path + 'images/triggermode.png'), '&Trigger Mode', self)
+        self.trigger_mode_act.setStatusTip('Enable and disable trigger mode')
         self.trigger_mode_act.setCheckable(True)
         self.trigger_mode_act.triggered.connect(self.onToggleTriggerMode)
 
-        self.start_live_act = QAction(QIcon(application_path + "images/livestream.png"), "&Live Stream", self)
-        self.start_live_act.setStatusTip("Start and stop the live stream")
+        self.start_live_act = QAction(QIcon(application_path + 'images/livestream.png'), '&Live Stream', self)
+        self.start_live_act.setStatusTip('Start and stop the live stream')
         self.start_live_act.setCheckable(True)
         self.start_live_act.triggered.connect(self.startStopStream)
 
-        self.close_device_act = QAction("Close", self)
-        self.close_device_act.setStatusTip("Close the currently opened device")
+        self.close_device_act = QAction('Close', self)
+        self.close_device_act.setStatusTip('Close the currently opened device')
         self.close_device_act.setShortcuts(QKeySequence.Close)
         self.close_device_act.triggered.connect(self.onCloseDevice)
 
-        self.set_roi_act = QAction("Select ROI", self)
-        self.set_roi_act.setStatusTip("Draw a rectangle to set ROI")
+        self.set_roi_act = QAction('Select ROI', self)
+        self.set_roi_act.setStatusTip('Draw a rectangle to set ROI')
         self.set_roi_act.setCheckable(True)
-        self.set_roi_act.triggered.connect(lambda: self.toggle_mode("roi"))
+        self.set_roi_act.triggered.connect(lambda: self.toggle_mode('roi'))
 
-        self.move_act = QAction("Move", self)
-        self.move_act.setStatusTip("Move the sample by dragging the view")
+        self.move_act = QAction('Move', self)
+        self.move_act.setStatusTip('Move the sample by dragging the view')
         self.move_act.setCheckable(True)
-        self.move_act.triggered.connect(lambda: self.toggle_mode("move"))
+        self.move_act.triggered.connect(lambda: self.toggle_mode('move'))
 
-        self.subtract_background_act = QAction("Background Subtraction", self)
-        self.subtract_background_act.setStatusTip("Toggle background subtraction")
+        self.subtract_background_act = QAction('Background Subtraction', self)
+        self.subtract_background_act.setStatusTip('Toggle background subtraction')
         self.subtract_background_act.setCheckable(True)
         self.subtract_background_act.triggered.connect(self.toggle_background_subtraction)
 
-        self.snap_background_act = QAction("&Snap Background", self)
-        self.snap_background_act.setStatusTip("Snap background image")
+        self.snap_background_act = QAction('&Snap Background', self)
+        self.snap_background_act.setStatusTip('Snap background image')
         self.snap_background_act.triggered.connect(self.snap_background)
 
-        self.snap_raw_photo_act = QAction("Snap Raw Photo", self)
-        self.snap_raw_photo_act.setStatusTip("Snap a single raw photo")
+        self.snap_raw_photo_act = QAction('Snap Raw Photo', self)
+        self.snap_raw_photo_act.setStatusTip('Snap a single raw photo')
         self.snap_raw_photo_act.triggered.connect(self.snap_raw_photo)
 
-        self.snap_processed_photo_act = QAction("Snap Photo")
-        self.snap_processed_photo_act.setStatusTip("Snap a single background subtracted photo")
+        self.snap_processed_photo_act = QAction('Snap Photo')
+        self.snap_processed_photo_act.setStatusTip('Snap a single background subtracted photo')
         self.snap_processed_photo_act.triggered.connect(self.snap_processed_photo)
 
-        self.z_sweep_act = QAction("Focus Sweep")
-        self.z_sweep_act.setStatusTip("Perform a focus sweep")
+        self.z_sweep_act = QAction('Focus Sweep')
+        self.z_sweep_act.setStatusTip('Perform a focus sweep')
         self.z_sweep_act.triggered.connect(self.z_sweep)
 
+        self.toggle_grid_act = QAction('Grid')
+        self.toggle_grid_act.setStatusTip('Toggles whether to use a grid for background')
+        self.toggle_grid_act.setCheckable(True)
+        self.toggle_grid_act.toggled.connect(lambda value: setattr(self, 'grid', value))
 
-        exit_act = QAction("E&xit", self)
+
+        exit_act = QAction('E&xit', self)
         exit_act.setShortcut(QKeySequence.Quit)
-        exit_act.setStatusTip("Exit program")
+        exit_act.setStatusTip('Exit program')
         exit_act.triggered.connect(self.close)
 
         #=========#
         # Menubar #
         #=========#
 
-        file_menu = self.menuBar().addMenu("&File")
+        file_menu = self.menuBar().addMenu('&File')
         file_menu.addAction(exit_act)
 
-        device_menu = self.menuBar().addMenu("&Device")
+        device_menu = self.menuBar().addMenu('&Device')
         device_menu.addAction(self.device_select_act)
         device_menu.addAction(self.device_properties_act)
         device_menu.addAction(self.device_driver_properties_act)
@@ -253,12 +259,14 @@ class MainWindow(QMainWindow):
         device_menu.addSeparator()
         device_menu.addAction(self.close_device_act)
 
-        capture_menu = self.menuBar().addMenu("&Capture")
+        capture_menu = self.menuBar().addMenu('&Capture')
         capture_menu.addAction(self.snap_raw_photo_act)
+        capture_menu.addSeparator()
         capture_menu.addAction(self.snap_processed_photo_act)
         capture_menu.addAction(self.z_sweep_act)
         capture_menu.addAction(self.snap_background_act)
         capture_menu.addAction(self.subtract_background_act)
+        capture_menu.addAction(self.toggle_grid_act)
         
 
 
@@ -290,12 +298,12 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.video_view)
         
 
-        self.statusBar().showMessage("Ready")
-        self.aquisition_label = QLabel("", self.statusBar())
+        self.statusBar().showMessage('Ready')
+        self.aquisition_label = QLabel('', self.statusBar())
         self.statusBar().addPermanentWidget(self.aquisition_label)
-        self.statistics_label = QLabel("", self.statusBar())
+        self.statistics_label = QLabel('', self.statusBar())
         self.statusBar().addPermanentWidget(self.statistics_label)
-        self.statusBar().addPermanentWidget(QLabel("  "))
+        self.statusBar().addPermanentWidget(QLabel('  '))
         self.camera_label = QLabel(self.statusBar())
         self.statusBar().addPermanentWidget(self.camera_label)
 
@@ -339,7 +347,6 @@ class MainWindow(QMainWindow):
         elif ev.type() == got_processed_photo_EVENT:
             self.got_image(ev.image_buffer)
             
-
     def onSelectDevice(self):
         dlg = ic4.pyside6.DeviceSelectionDialog(self.grabber, parent=self)
         if dlg.exec() == 1:
@@ -351,13 +358,13 @@ class MainWindow(QMainWindow):
 
     def onDeviceProperties(self):
         if self.property_dialog is None:
-            self.property_dialog = ic4.pyside6.PropertyDialog(self.grabber, parent=self, title="Device Properties")
+            self.property_dialog = ic4.pyside6.PropertyDialog(self.grabber, parent=self, title='Device Properties')
             # set default vis
         
         self.property_dialog.show()
 
     def onDeviceDriverProperties(self):
-        dlg = ic4.pyside6.PropertyDialog(self.grabber.driver_property_map, parent=self, title="Device Driver Properties")
+        dlg = ic4.pyside6.PropertyDialog(self.grabber.driver_property_map, parent=self, title='Device Driver Properties')
         # set default vis
 
         dlg.exec()
@@ -368,12 +375,7 @@ class MainWindow(QMainWindow):
         try:
             self.device_property_map.set_value(ic4.PropId.TRIGGER_MODE, self.trigger_mode_act.isChecked())
         except ic4.IC4Exception as e:
-            QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
-    
-    def onShootBG(self):
-        with self.shoot_photo_mutex:
-            self.shoot_photo = True
-            self.shoot_bg = True
+            QMessageBox.critical(self, '', f'{e}', QMessageBox.StandardButton.Ok)
 
     def onUpdateStatisticsTimer(self):
         if not self.grabber.is_device_valid:
@@ -381,22 +383,22 @@ class MainWindow(QMainWindow):
         
         try:
             stats = self.grabber.stream_statistics
-            text = f"Frames Delivered: {stats.sink_delivered} Dropped: {stats.device_transmission_error}/{stats.device_underrun}/{stats.transform_underrun}/{stats.sink_underrun}"
+            text = f'Frames Delivered: {stats.sink_delivered} Dropped: {stats.device_transmission_error}/{stats.device_underrun}/{stats.transform_underrun}/{stats.sink_underrun}'
             self.statistics_label.setText(text)
             tooltip = (
-                f"Frames Delivered: {stats.sink_delivered}"
-                f"Frames Dropped:"
-                f"  Device Transmission Error: {stats.device_transmission_error}"
-                f"  Device Underrun: {stats.device_underrun}"
-                f"  Transform Underrun: {stats.transform_underrun}"
-                f"  Sink Underrun: {stats.sink_underrun}"
+                f'Frames Delivered: {stats.sink_delivered}'
+                f'Frames Dropped:'
+                f'  Device Transmission Error: {stats.device_transmission_error}'
+                f'  Device Underrun: {stats.device_underrun}'
+                f'  Transform Underrun: {stats.transform_underrun}'
+                f'  Sink Underrun: {stats.sink_underrun}'
             )
             self.statistics_label.setToolTip(tooltip)
         except ic4.IC4Exception:
             pass
 
     def onDeviceLost(self):
-        QMessageBox.warning(self, "", f"The video capture device is lost!", QMessageBox.StandardButton.Ok)
+        QMessageBox.warning(self, '', f'The video capture device is lost!', QMessageBox.StandardButton.Ok)
 
         # stop video
 
@@ -406,11 +408,11 @@ class MainWindow(QMainWindow):
     def onDeviceOpened(self):
         self.device_property_map = self.grabber.device_property_map
 
-        self.device_property_map.set_value(ic4.PropId.OFFSET_AUTO_CENTER, "Off")
-        self.device_property_map.set_value(ic4.PropId.GAIN_AUTO, "Off")
+        self.device_property_map.set_value(ic4.PropId.OFFSET_AUTO_CENTER, 'Off')
+        self.device_property_map.set_value(ic4.PropId.GAIN_AUTO, 'Off')
         self.device_property_map.set_value(ic4.PropId.GAIN, 0)
-        self.device_property_map.set_value(ic4.PropId.EXPOSURE_AUTO, "Off")
-        self.device_property_map.set_value(ic4.PropId.PIXEL_FORMAT, "Mono 16")
+        self.device_property_map.set_value(ic4.PropId.EXPOSURE_AUTO, 'Off')
+        self.device_property_map.set_value(ic4.PropId.PIXEL_FORMAT, 'Mono 16')
         self.width = self.device_property_map.get_value_int(ic4.PropId.WIDTH)
         self.height = self.device_property_map.get_value_int(ic4.PropId.HEIGHT)
         self.video_view.set_size(
@@ -433,7 +435,7 @@ class MainWindow(QMainWindow):
             self.trigger_mode_act.setEnabled(False)
         else:
             try:
-                self.trigger_mode_act.setChecked(self.device_property_map.get_value_str(ic4.PropId.TRIGGER_MODE) == "On")
+                self.trigger_mode_act.setChecked(self.device_property_map.get_value_str(ic4.PropId.TRIGGER_MODE) == 'On')
                 self.trigger_mode_act.setEnabled(True)
             except ic4.IC4Exception:
                 self.trigger_mode_act.setChecked(False)
@@ -454,8 +456,8 @@ class MainWindow(QMainWindow):
         self.z_sweep_act.setEnabled(self.grabber.is_streaming and not self.aquiring and not not self.z_stage and self.xy_stage)
         self.set_roi_act.setEnabled(self.grabber.is_device_valid and not self.aquiring)
         self.move_act.setEnabled(self.grabber.is_streaming and not self.aquiring and self.xy_stage)
-        self.move_act.setChecked(self.video_view.mode == "move")
-        self.set_roi_act.setChecked(self.video_view.mode == "roi")
+        self.move_act.setChecked(self.video_view.mode == 'move')
+        self.set_roi_act.setChecked(self.video_view.mode == 'roi')
         self.subtract_background_act.setEnabled(self.background is not None)
 
         self.updateTriggerControl(None)
@@ -463,9 +465,9 @@ class MainWindow(QMainWindow):
     def updateCameraLabel(self):
         try:
             info = self.grabber.device_info
-            self.camera_label.setText(f"{info.model_name} {info.serial}")
+            self.camera_label.setText(f'{info.model_name} {info.serial}')
         except ic4.IC4Exception:
-            self.camera_label.setText("No Device")
+            self.camera_label.setText('No Device')
 
 
     def startStopStream(self):
@@ -477,27 +479,27 @@ class MainWindow(QMainWindow):
                     self.grabber.stream_setup(self.sink)
 
         except ic4.IC4Exception as e:
-            QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
+            QMessageBox.critical(self, '', f'{e}', QMessageBox.StandardButton.Ok)
 
         self.updateControls()
     
-
-    # Functions to take raw images and aquisitions
+    #==============================================#
+    # Functions to take raw images and aquisitions #
+    #==============================================#
     
-    # Snap and save raw image
+    # Snap and save one raw image
     def snap_raw_photo(self):
-        self.got_image = self.got_single_image
+        self.got_image = self.save_single_raw_image
         with self.shoot_photo_mutex:
             self.shoot_photo = True
     
 
-    def got_single_image(self, image_buffer: ic4.ImageBuffer):        
-        dialog = QFileDialog(self, "Save Photo")
-        dialog.setNameFilter("TIFF (*.tif)")
+    def save_single_raw_image(self, image_buffer: ic4.ImageBuffer):
+        dialog = QFileDialog(self, 'Save Photo')
+        dialog.setNameFilter('TIFF (*.tif)')
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         dialog.setDirectory(self.data_directory)
-
         if dialog.exec():
             full_path = dialog.selectedFiles()[0]
             self.data_directory = QFileInfo(full_path).absolutePath()
@@ -506,8 +508,10 @@ class MainWindow(QMainWindow):
                 image_buffer.save_as_tiff(full_path)
                 
             except ic4.IC4Exception as e:
-                QMessageBox.critical(self, "", f"{e}", QMessageBox.StandardButton.Ok)
+                QMessageBox.critical(self, '', f'{e}', QMessageBox.StandardButton.Ok)
     
+
+    # Sequence handling
 
     def take_sequence(self):
         distance = 10
@@ -533,40 +537,77 @@ class MainWindow(QMainWindow):
     def got_sequence_image(self, image_buffer: ic4.ImageBuffer):
         self.photos[self.photos_received] = image_buffer.numpy_wrap()
         self.photos_received += 1
+    
+    def finish_aquisition(self):
+        self.aquiring = False
+        self.updateControls()
+
 
     # Snap a sequence of images in a grid to calculate the background and save it.
+    # else snap one image and save it
+
     def snap_background(self):
-        self.photos = np.zeros((4, self.height, self.width, 1), dtype=np.uint16)
-        self.got_image = self.got_sequence_image
-        with self.aquiring_mutex:
-            if not self.aquiring:
-                self.aquiring = True
-                self.aquisition_worker = Worker(self.take_sequence)
-                self.aquisition_worker.finished.connect(self.update_background)
-                self.aquisition_worker.finished.connect(self.finish_aquisition)
-                self.aquisition_worker.start()
+        if self.grid:
+            self.photos = np.zeros((4, self.height, self.width, 1), dtype=np.uint16)
+            self.got_image = self.got_sequence_image
+            with self.aquiring_mutex:
+                if not self.aquiring:
+                    self.aquiring = True
+                    self.aquisition_worker = Worker(self.take_sequence)
+                    self.aquisition_worker.finished.connect(self.update_background)
+                    self.aquisition_worker.finished.connect(self.finish_aquisition)
+                    self.aquisition_worker.start()
+            self.updateControls()
+        else:
+            self.got_image = self.got_single_background
+            with self.shoot_photo_mutex:
+                self.shoot_photo = True
+    
+    def got_single_background(self, image_buffer: ic4.ImageBuffer):
+        self.background = image_buffer.numpy_wrap()
         self.updateControls()
 
 
     def update_background(self):
-        self.background = common_background(self.photos)
+        self.background = pc.common_background(self.photos)
         self.updateControls()
 
     def snap_processed_photo(self):
-        self.photos = np.zeros((4, self.height, self.width, 1), dtype=np.uint16)
-        self.got_image = self.got_sequence_image
-        with self.aquiring_mutex:
-            if not self.aquiring:
-                self.aquiring = True
-                self.aquisition_worker = Worker(self.take_sequence)
-                self.aquisition_worker.finished.connect(self.save_processed_photo)
-                self.aquisition_worker.finished.connect(self.finish_aquisition)
-                self.aquisition_worker.start()
-        self.updateControls()
-    
+        if self.grid:
+            self.photos = np.zeros((4, self.height, self.width, 1), dtype=np.uint16)
+            self.got_image = self.got_sequence_image
+            with self.aquiring_mutex:
+                if not self.aquiring:
+                    self.aquiring = True
+                    self.aquisition_worker = Worker(self.take_sequence)
+                    self.aquisition_worker.finished.connect(self.save_processed_photo)
+                    self.aquisition_worker.finished.connect(self.finish_aquisition)
+                    self.aquisition_worker.start()
+            self.updateControls()
+        else:
+            self.snap_background()
+            # Snap single picture
+            self.got_image = self.got_single_process_image
+            with self.shoot_photo_mutex:
+                self.shoot_photo = True
+        
+    def got_single_process_image(self, image_buffer: ic4.ImageBuffer):
+        dialog = QFileDialog(self, 'Save Photo')
+        dialog.setNameFilter('TIFF (*.tif)')
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setDirectory(self.data_directory)
+
+        if dialog.exec():
+            full_path = dialog.selectedFiles()[0]
+            self.data_directory = QFileInfo(full_path).absolutePath()
+
+            diff = pc.background_subtracted(image_buffer.numpy_wrap(), self.background)
+            tiff.imwrite(full_path, pc.float_to_mono(diff))
+
     def save_processed_photo(self):
-        dialog = QFileDialog(self, "Save Photo")
-        dialog.setNameFilter("TIFF (*.tif)")
+        dialog = QFileDialog(self, 'Save Photo')
+        dialog.setNameFilter('TIFF (*.tif)')
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         dialog.setDirectory(self.data_directory)
@@ -574,16 +615,16 @@ class MainWindow(QMainWindow):
             full_path = dialog.selectedFiles()[0]
             self.data_directory = QFileInfo(full_path).absolutePath()
             
-            background = common_background(self.photos)
+            background = pc.common_background(self.photos)
             data = self.photos[0]
 
-            diff = background_subtracted(data, background)
+            diff = pc.background_subtracted(data, background)
 
             
             # also contains raw data
-            tiff.imwrite(full_path, float_to_mono(diff))
-            np.save(os.path.splitext(full_path)[0] + "_raw.npy", self.photos)
-            np.save(os.path.splitext(full_path)[0] + ".npy", diff)
+            tiff.imwrite(full_path, pc.float_to_mono(diff))
+            np.save(os.path.splitext(full_path)[0] + '_raw.npy', self.photos)
+            np.save(os.path.splitext(full_path)[0] + '.npy', diff)
 
     
     def z_sweep(self):
@@ -603,7 +644,7 @@ class MainWindow(QMainWindow):
         
         z_data_raw = np.zeros((N, 4, self.height, self.width, 1), dtype=np.uint16)
         for i, z in enumerate(z_positions):
-            self.aquisition_label.setText(f"Aquiring Data: z sweep progression {i+1}/{N}")
+            self.aquisition_label.setText(f'Aquiring Data: z sweep progression {i+1}/{N}')
             self.photos = np.zeros((4, self.height, self.width, 1))
             pos = z_zero + z
             self.z_position = i
@@ -613,35 +654,33 @@ class MainWindow(QMainWindow):
             self.take_sequence()
             z_data_raw[i] = self.photos
         self.mmc.setZPosition(z_zero)
-        self.aquisition_label.setText("Calculating Images")
+        self.aquisition_label.setText('Calculating Images')
         self.save_z_sweep(z_data_raw)
 
     
     def save_z_sweep(self, z_data_raw):
         z_data = np.zeros((len(z_data_raw), self.height, self.width, 1), dtype=np.float64)
-        name = os.path.join(self.data_directory, "z_sweep_0")
+        name = os.path.join(self.data_directory, 'z_sweep_0')
         n = 1
         while os.path.isdir(name):
-            name = os.path.join(self.data_directory, f"z_sweep_{n}")
+            name = os.path.join(self.data_directory, f'z_sweep_{n}')
         
         os.mkdir(name)
 
         for i in range(len(z_data_raw)):
             photos = z_data_raw[i]
-            background = common_background(photos)
+            background = pc.common_background(photos)
             data = photos[0]
-            diff = background_subtracted(data, background)
+            diff = pc.background_subtracted(data, background)
             z_data[i] = diff
-            tiff.imwrite(os.path.join(name, f"z_sweep_{i}.tif"), float_to_mono(diff))
-        np.save(os.path.join(name, "data.npy"), z_data)
-        np.save(os.path.join(name, "data_raw.npy"), z_data_raw)
+            tiff.imwrite(os.path.join(name, f'z_sweep_{i}.tif'), pc.float_to_mono(diff))
+        np.save(os.path.join(name, 'data.npy'), z_data)
+        np.save(os.path.join(name, 'data_raw.npy'), z_data_raw)
         #self.device_property_map.get_value_int(ic4.PropId.EXPOSURE_TIME)
-        self.aquisition_label.setText("")
-        self.statusBar().showMessage("Done!")
+        self.aquisition_label.setText('')
+        self.statusBar().showMessage('Done!')
 
-    def finish_aquisition(self):
-        self.aquiring = False
-        self.updateControls()
+
 
     def update_roi(self, roi):
         # Set ROI in camera
@@ -666,7 +705,7 @@ class MainWindow(QMainWindow):
     
     def toggle_mode(self, mode):
         if self.video_view.mode == mode:
-            self.video_view.mode = "navigation"
+            self.video_view.mode = 'navigation'
         else:
             self.video_view.mode = mode
             

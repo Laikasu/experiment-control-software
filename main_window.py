@@ -1,0 +1,538 @@
+from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, Signal, QThread, QWaitCondition, QMutex, QTemporaryFile
+from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
+from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
+
+import os
+import shutil
+import numpy as np
+import tifffile as tiff
+import cv2
+import time
+
+from pymmcore_plus import CMMCorePlus
+
+import imagingcontrol4 as ic4
+
+from widgets import VideoView
+import processing as pc
+from camera import Camera
+
+from functools import partial
+
+
+
+
+class PersistentWorkerThread(QThread):
+    def __init__(self, func):
+        super().__init__()
+        self.func = func
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
+        QMainWindow.__init__(self)
+        self.setWindowIcon(QIcon(application_path + '/images/tis.ico'))
+
+        # Setup stage
+        # Setup microscope connection
+
+        mm_dir = 'C:/Program Files/Micro-Manager-2.0'
+        self.setup_micromanager(mm_dir)
+        
+        
+        self.photos_received = 0
+        self.grid = False
+        self.got_image_mutex = QMutex()
+        self.got_image = QWaitCondition()
+
+        self.aquiring = False
+        self.aquiring_mutex = QMutex()
+
+        self.temp_video_file = None
+        
+
+        # Make sure the %appdata%/demoapp directory exists
+        appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
+        picture_directory = QStandardPaths.writableLocation(QStandardPaths.PicturesLocation)
+        video_directory = QStandardPaths.writableLocation(QStandardPaths.MoviesLocation)
+        QDir(appdata_directory).mkpath('.')
+        
+
+        self.data_directory = picture_directory + '/Data'
+        QDir(self.data_directory).mkpath('.')
+        self.backgrounds_directory = picture_directory + '/Backgrounds'
+        QDir(self.backgrounds_directory).mkpath('.')
+        self.save_videos_directory = video_directory
+
+        
+
+        self.video_view = VideoView(self)
+        self.video_view.roi_set.connect(self.update_roi)
+        self.move_stage_worker = PersistentWorkerThread(self.move_stage)
+        self.video_view.move_stage.connect(self.move_stage_worker.func)
+
+        self.camera = Camera(self)
+        self.camera.new_frame.connect(self.update_display)
+        self.camera.state_changed.connect(self.update_controls)
+        self.camera.camera_opened.connect(self.video_view.set_size)
+
+        self.background: np.ndarray = None
+        self.subtract_background = False
+
+        self.createUI()
+        
+        
+        self.update_controls()
+    
+
+    def setup_micromanager(self, mm_dir):
+        application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
+        self.xy_stage = None
+        self.z_stage = None
+        self.mmc = CMMCorePlus.instance()
+        try:
+            self.mmc.setDeviceAdapterSearchPaths([mm_dir])
+            self.mmc.loadSystemConfiguration(os.path.join(application_path, 'MMConfig.cfg'))
+        except Exception as e:
+            QMessageBox.warning(self, 'Error', f'failed to load mm config: \n{e}')
+        else:
+            self.z_stage = self.mmc.getFocusDevice()
+            self.xy_stage = self.mmc.getXYStageDevice()
+            
+    def createUI(self):
+        self.resize(1024, 768)
+
+        #=========#
+        # Actions #
+        #=========#
+        application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
+        
+        self.device_select_act = QAction(QIcon(application_path + 'images/camera.png'), '&Select', self)
+        self.device_select_act.setStatusTip('Select a video capture device')
+        self.device_select_act.setShortcut(QKeySequence.Open)
+        self.device_select_act.triggered.connect(partial(self.camera.onSelectDevice, self))
+
+        self.device_properties_act = QAction(QIcon(application_path + 'images/imgset.png'), '&Properties', self)
+        self.device_properties_act.setStatusTip('Show device property dialog')
+        self.device_properties_act.triggered.connect(partial(self.camera.onDeviceProperties, self))
+
+        self.device_driver_properties_act = QAction('&Driver Properties', self)
+        self.device_driver_properties_act.setStatusTip('Show device driver property dialog')
+        self.device_driver_properties_act.triggered.connect(partial(self.camera.onDeviceDriverProperties, self))
+
+        self.start_live_act = QAction(QIcon(application_path + 'images/livestream.png'), '&Live Stream', self)
+        self.start_live_act.setStatusTip('Start and stop the live stream')
+        self.start_live_act.setCheckable(True)
+        self.start_live_act.triggered.connect(self.camera.startStopStream)
+
+        self.close_device_act = QAction('Close', self)
+        self.close_device_act.setStatusTip('Close the currently opened device')
+        self.close_device_act.setShortcuts(QKeySequence.Close)
+        self.close_device_act.triggered.connect(self.camera.onCloseDevice)
+
+        self.set_roi_act = QAction('Select ROI', self)
+        self.set_roi_act.setStatusTip('Draw a rectangle to set ROI')
+        self.set_roi_act.setCheckable(True)
+        self.set_roi_act.triggered.connect(lambda: self.toggle_mode('roi'))
+
+        self.move_act = QAction('Move', self)
+        self.move_act.setStatusTip('Move the sample by dragging the view')
+        self.move_act.setCheckable(True)
+        self.move_act.triggered.connect(lambda: self.toggle_mode('move'))
+
+        self.subtract_background_act = QAction('Background Subtraction', self)
+        self.subtract_background_act.setStatusTip('Toggle background subtraction')
+        self.subtract_background_act.setCheckable(True)
+        self.subtract_background_act.triggered.connect(self.toggle_background_subtraction)
+
+        self.snap_background_act = QAction('&Snap Background', self)
+        self.snap_background_act.setStatusTip('Snap background image')
+        self.snap_background_act.triggered.connect(self.snap_background)
+
+        self.snap_raw_photo_act = QAction('Snap Raw Photo', self)
+        self.snap_raw_photo_act.setStatusTip('Snap a single raw photo')
+        self.snap_raw_photo_act.triggered.connect(self.snap_photo)
+
+        self.snap_processed_photo_act = QAction('Snap Photo')
+        self.snap_processed_photo_act.setStatusTip('Snap a single background subtracted photo')
+        self.snap_processed_photo_act.triggered.connect(self.snap_processed_photo)
+
+        self.z_sweep_act = QAction('Focus Sweep')
+        self.z_sweep_act.setStatusTip('Perform a focus sweep')
+        self.z_sweep_act.triggered.connect(self.z_sweep)
+
+        self.video_act = QAction(QIcon(application_path + "images/recordstart.png"), "&Capture Video", self)
+        self.video_act.setToolTip("Capture video into MP4 file")
+        self.video_act.setCheckable(True)
+        self.video_act.toggled.connect(self.toggle_video)
+
+        self.toggle_grid_act = QAction('Grid')
+        self.toggle_grid_act.setStatusTip('Toggles whether to use a grid for background')
+        self.toggle_grid_act.setCheckable(True)
+        self.toggle_grid_act.toggled.connect(lambda value: setattr(self, 'grid', value))
+
+
+        exit_act = QAction('E&xit', self)
+        exit_act.setShortcut(QKeySequence.Quit)
+        exit_act.setStatusTip('Exit program')
+        exit_act.triggered.connect(self.close)
+
+        #=========#
+        # Menubar #
+        #=========#
+
+        file_menu = self.menuBar().addMenu('&File')
+        file_menu.addAction(exit_act)
+
+        device_menu = self.menuBar().addMenu('&Device')
+        device_menu.addAction(self.device_select_act)
+        device_menu.addAction(self.device_properties_act)
+        device_menu.addAction(self.device_driver_properties_act)
+        device_menu.addAction(self.set_roi_act)
+        device_menu.addAction(self.move_act)
+        device_menu.addAction(self.start_live_act)
+        device_menu.addSeparator()
+        device_menu.addAction(self.close_device_act)
+
+        capture_menu = self.menuBar().addMenu('&Capture')
+        capture_menu.addAction(self.snap_raw_photo_act)
+        capture_menu.addSeparator()
+        capture_menu.addAction(self.snap_processed_photo_act)
+        capture_menu.addAction(self.z_sweep_act)
+        capture_menu.addAction(self.snap_background_act)
+        capture_menu.addAction(self.subtract_background_act)
+        capture_menu.addAction(self.toggle_grid_act)
+        
+
+
+
+        #=========#
+        # Toolbar #
+        #=========#
+
+        toolbar = QToolBar(self)
+        self.addToolBar(Qt.TopToolBarArea, toolbar)
+        toolbar.addAction(self.device_select_act)
+        toolbar.addAction(self.device_properties_act)
+        toolbar.addSeparator()
+        toolbar.addAction(self.start_live_act)
+        toolbar.addAction(self.video_act)
+        toolbar.addSeparator()
+        toolbar.addAction(self.set_roi_act)
+        toolbar.addAction(self.move_act)
+        toolbar.addSeparator()
+        toolbar.addAction(self.subtract_background_act)
+        toolbar.addAction(self.snap_background_act)
+        toolbar.addSeparator()
+        toolbar.addAction(self.snap_raw_photo_act)
+        toolbar.addAction(self.snap_processed_photo_act)
+        #toolbar.addAction(self.z_sweep_act)
+
+
+
+        self.setCentralWidget(self.video_view)
+        
+
+        self.statusBar().showMessage('Ready')
+        self.aquisition_label = QLabel('', self.statusBar())
+        self.statusBar().addPermanentWidget(self.aquisition_label)
+        self.statistics_label = QLabel('', self.statusBar())
+        self.statusBar().addPermanentWidget(self.statistics_label)
+        self.statusBar().addPermanentWidget(QLabel('  '))
+        self.camera_label = QLabel(self.statusBar())
+        self.statusBar().addPermanentWidget(self.camera_label)
+
+        self.update_statistics_timer = QTimer()
+        self.update_statistics_timer.timeout.connect(partial(self.camera.onUpdateStatisticsTimer, self.statistics_label))
+        self.update_statistics_timer.start()
+
+    def update_controls(self):
+        grabber = self.camera.grabber
+        if not grabber.is_device_open:
+            self.statistics_label.clear()
+        
+        self.device_properties_act.setEnabled(grabber.is_device_valid and not self.aquiring)
+        self.device_driver_properties_act.setEnabled(grabber.is_device_valid and not self.aquiring)
+        self.start_live_act.setEnabled(grabber.is_device_valid and not self.aquiring)
+        self.start_live_act.setChecked(grabber.is_streaming)
+        self.video_act.setEnabled(grabber.is_streaming and not self.aquiring)
+        self.close_device_act.setEnabled(grabber.is_device_open and not self.aquiring)
+        self.snap_background_act.setEnabled(grabber.is_streaming and not self.aquiring and self.xy_stage)
+        self.snap_processed_photo_act.setEnabled(grabber.is_streaming and not self.aquiring and self.xy_stage)
+        self.snap_raw_photo_act.setEnabled(grabber.is_streaming and not self.aquiring)
+        self.z_sweep_act.setEnabled(grabber.is_streaming and not self.aquiring and not not self.z_stage and self.xy_stage)
+        self.set_roi_act.setEnabled(grabber.is_device_valid and not self.aquiring)
+        self.move_act.setEnabled(grabber.is_streaming and not self.aquiring and self.xy_stage)
+        self.move_act.setChecked(self.video_view.mode == 'move')
+        self.set_roi_act.setChecked(self.video_view.mode == 'roi')
+        self.subtract_background_act.setEnabled(self.background is not None)
+
+    def closeEvent(self, ev: QCloseEvent):
+        self.update_statistics_timer.stop()
+        self.camera.closeEvent(ev)
+    
+    #==============================================#
+    # Functions to take raw images and aquisitions #
+    #==============================================#
+    
+    # Snap and save one raw image
+    def snap_photo(self):
+        self.camera.new_frame.connect(self.save_image, Qt.ConnectionType.SingleShotConnection)
+    
+
+    def save_image(self, image: np.ndarray, processed = False):
+        dialog = QFileDialog(self, 'Save Photo')
+        dialog.setNameFilter('TIFF (*.tif)')
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setDirectory(self.data_directory)
+
+        if dialog.exec():
+            full_path = dialog.selectedFiles()[0]
+            self.data_directory = QFileInfo(full_path).absolutePath()
+            if processed and self.background is not None:
+                diff = pc.background_subtracted(image, self.background)
+                image = pc.float_to_mono(diff)
+
+
+            tiff.imwrite(full_path, image)
+
+
+
+    # Sequence handling
+
+    class AquisitionWorkerThread(QThread):
+        done = Signal()
+        def __init__(self, parent, func, *args):
+            super().__init__(parent)
+            self.args = args
+            self.func = func
+            self.parent = parent
+            self.parent.aquiring_mutex.lock()
+            self.parent.aquiring = True
+            self.parent.aquiring_mutex.unlock()
+            self.parent.update_controls()
+
+        def run(self):
+            self.func(*self.args)
+            self.done.emit()
+            self.finish_aquisition()
+        
+        def finish_aquisition(self):
+            self.parent.aquiring_mutex.lock()
+            self.parent.aquiring = False
+            self.parent.aquiring_mutex.unlock()
+            self.parent.update_controls()
+
+    def take_sequence(self):
+        
+        distance = 10
+        positions = np.array([[0,0], [1,0], [1,1], [0,1]])*distance
+        anchor = np.array(self.mmc.getXYPosition(self.xy_stage))
+        for i, position in enumerate(positions):
+            pos = position + anchor
+            self.mmc.setXYPosition(pos[0], pos[1])
+            self.mmc.waitForDevice(self.xy_stage)
+            time.sleep(0.1)
+            # shoot photo and wait for it to be shot
+            self.camera.new_frame.connect(partial(self.store_sequence_image, i), Qt.ConnectionType.SingleShotConnection)
+            self.got_image_mutex.lock()
+            self.got_image.wait(self.got_image_mutex)
+            self.got_image_mutex.unlock()
+        
+        # Return to base
+        self.mmc.setXYPosition(anchor[0], anchor[1])
+
+    def store_sequence_image(self, i, image: np.ndarray):
+        self.photos[i] = image
+        self.got_image.wakeAll()
+    
+    def toggle_video(self, start: bool):
+        if start:
+            self.start_video()
+        else:
+            self.stop_video()
+
+    def start_video(self):
+        print('start')
+        self.aquiring_mutex.lock()
+        self.aquiring = True
+        self.aquiring_mutex.unlock()
+        self.update_controls()
+
+        self.temp_video_file = QTemporaryFile()
+        self.temp_video_file.open()
+        print(self.temp_video_file.fileName())
+        fps = self.camera.device_property_map.get_value_int(ic4.PropId.ACQUISITION_FRAME_RATE)
+        self.writer = cv2.VideoWriter(self.temp_video_file.fileName, cv2.VideoWriter_fourcc(*'MP4V'), fps, (self.width, self.height))
+        self.camera.new_frame.connect(partial(self.write_frame, self.writer))
+
+    def write_frame(self, writer, frame: np.ndarray):
+        writer.write(frame)
+    
+    def stop_video(self):
+        print('stop')
+        if (self.temp_video_file is not None):
+            self.camera.new_frame.disconnect()
+            self.writer.release()
+            self.temp_video_file.close()
+            self.aquiring_mutex.lock()
+            self.aquiring = False
+            self.aquiring_mutex.unlock()
+            self.update_controls()
+
+            dialog = QFileDialog(self, 'Save Video')
+            dialog.setNameFilter('MP4 (*.mp4)')
+            dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+            dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+            dialog.setDirectory(self.save_videos_directory)
+            if dialog.exec():
+                filepath = dialog.selectedFiles()[0]
+                
+                if not filepath.lower().endswith('.mp4'):
+                    filepath += '.mp4'
+                
+                shutil.copy2(self.temp_video_file.fileName(), filepath)
+                self.temp_video_file = None
+
+
+
+    # Snap a sequence of images in a grid to calculate the background and save it.
+    # else snap one image and save it
+
+    def snap_background(self):
+        if self.grid:
+            self.photos = np.zeros((4, self.height, self.width, 1), dtype=np.uint16)
+            if not self.aquiring:
+                self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_sequence)
+                self.aquisition_worker.done.connect(self.set_background)
+                self.aquisition_worker.start()
+        else:
+            self.camera.new_frame.connect(self.set_background, Qt.ConnectionType.SingleShotConnection)
+    
+    def set_background(self, image: np.ndarray):
+        print(f'image has {image.ndim} dimensions.')
+        self.background = pc.common_background(image) if image.ndim == 3 else image
+        self.update_controls()
+
+    def snap_processed_photo(self):
+        if self.grid:
+            self.photos = np.zeros((4, self.height, self.width, 1), dtype=np.uint16)
+            if not self.aquiring:
+                self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_sequence)
+                self.aquisition_worker.done.connect(self.save_processed_photo)
+                self.aquisition_worker.start()
+        else:
+            # Snap single picture
+            self.camera.new_frame.connect(partial(self.save_image, processed=True), Qt.ConnectionType.SingleShotConnection)
+
+    def save_processed_photo(self):
+        dialog = QFileDialog(self, 'Save Photo')
+        dialog.setNameFilter('TIFF (*.tif)')
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setDirectory(self.data_directory)
+        if dialog.exec():
+            full_path = dialog.selectedFiles()[0]
+            self.data_directory = QFileInfo(full_path).absolutePath()
+            
+            background = pc.common_background(self.photos)
+            data = self.photos[0]
+
+            diff = pc.background_subtracted(data, background)
+
+            
+            # also contains raw data
+            tiff.imwrite(full_path, pc.float_to_mono(diff))
+            np.save(os.path.splitext(full_path)[0] + '_raw.npy', self.photos)
+            np.save(os.path.splitext(full_path)[0] + '.npy', diff)
+
+    
+    def z_sweep(self):
+        if not self.aquiring:
+            self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_z_sweep)
+            self.aquisition_worker.start()
+        self.update_controls()
+    
+    def take_z_sweep(self):
+        z_zero = self.mmc.getZPosition()
+        N = 100
+        z_positions = np.linspace(-5, 5, N)
+        
+        z_data_raw = np.zeros((N, 4, self.height, self.width, 1), dtype=np.uint16)
+        for i, z in enumerate(z_positions):
+            self.aquisition_label.setText(f'Aquiring Data: z sweep progression {i+1}/{N}')
+            self.photos = np.zeros((4, self.height, self.width, 1))
+            pos = z_zero + z
+            self.z_position = i
+            self.mmc.setZPosition(pos)
+            self.mmc.waitForDevice(self.z_stage)
+            time.sleep(0.1)
+            self.take_sequence()
+            z_data_raw[i] = self.photos
+        self.mmc.setZPosition(z_zero)
+        self.aquisition_label.setText('Calculating Images')
+        self.save_z_sweep(z_data_raw)
+
+    
+    def save_z_sweep(self, z_data_raw):
+        z_data = np.zeros((len(z_data_raw), self.height, self.width, 1), dtype=np.float64)
+        name = os.path.join(self.data_directory, 'z_sweep_0')
+        n = 1
+        while os.path.isdir(name):
+            name = os.path.join(self.data_directory, f'z_sweep_{n}')
+        
+        os.mkdir(name)
+
+        for i in range(len(z_data_raw)):
+            photos = z_data_raw[i]
+            background = pc.common_background(photos)
+            data = photos[0]
+            diff = pc.background_subtracted(data, background)
+            z_data[i] = diff
+            tiff.imwrite(os.path.join(name, f'z_sweep_{i}.tif'), pc.float_to_mono(diff))
+        np.save(os.path.join(name, 'data.npy'), z_data)
+        np.save(os.path.join(name, 'data_raw.npy'), z_data_raw)
+        #self.device_property_map.get_value_int(ic4.PropId.EXPOSURE_TIME)
+        self.aquisition_label.setText('')
+        self.statusBar().showMessage('Done!')
+
+
+
+    def update_roi(self, roi):
+        # Set ROI in camera
+        self.camera.startStopStream()
+        self.camera.device_property_map.set_value(ic4.PropId.WIDTH, int(roi.width()))
+        self.camera.device_property_map.set_value(ic4.PropId.HEIGHT, int(roi.height()))
+        self.camera.device_property_map.set_value(ic4.PropId.OFFSET_X, int(roi.left()))
+        self.camera.device_property_map.set_value(ic4.PropId.OFFSET_Y, int(roi.top()))
+        self.camera.startStopStream()
+        self.width = roi.width()
+        self.height = roi.height()
+
+        # Go out of roi mode in UI
+        self.update_controls()
+    
+    def move_stage(self, displacement: np.ndarray):
+        displacement_micron = 3.45*displacement/40
+        self.mmc.setRelativeXYPosition(-displacement_micron[1], -displacement_micron[0])
+
+    def toggle_background_subtraction(self):
+        self.subtract_background = not self.subtract_background
+    
+    def toggle_mode(self, mode):
+        if self.video_view.mode == mode:
+            self.video_view.mode = 'navigation'
+        else:
+            self.video_view.mode = mode
+            
+        self.update_controls()
+        
+    
+    def update_display(self, frame: np.ndarray):
+        if (self.subtract_background and self.background is not None):
+            # (reference + signal) / reference
+            diff = pc.background_subtracted(frame, self.background)
+            frame = pc.float_to_mono(diff)
+        self.video_view.update_image(frame)

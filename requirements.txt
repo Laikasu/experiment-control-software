@@ -5,3 +5,4 @@ numpy
 qtpy
 pymmcore-plus
 tifffile
+opencv-python

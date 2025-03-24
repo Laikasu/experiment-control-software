@@ -4,8 +4,6 @@ from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
 
 import numpy as np
 
-import imagingcontrol4 as ic4
-
 class VideoView(QGraphicsView):
     roi_set = Signal(QRect)
     move_stage = Signal(np.ndarray)
@@ -184,5 +182,3 @@ class VideoView(QGraphicsView):
                     self.roi_graphic.hide()
                     self.camera_display.setOffset(rect.topLeft())
         return super().mouseReleaseEvent(event)
-
-
