@@ -12,7 +12,9 @@ DEVICE_LOST_EVENT = QEvent.Type(QEvent.Type.User + 1)
 class Camera(QObject):
     new_frame = Signal(np.ndarray)
     state_changed = Signal()
-    camera_opened = Signal(int, int, int, int)
+    opened = Signal(int, int, int, int, int, int)
+    label_update = Signal(str)
+    statistics_update = Signal(str, str)
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -20,6 +22,10 @@ class Camera(QObject):
         self.grabber.event_add_device_lost(lambda g: QApplication.postEvent(self, QEvent(DEVICE_LOST_EVENT)))
         self.device_property_map = None
         self.property_dialog = None
+
+        self.update_statistics_timer = QTimer()
+        self.update_statistics_timer.timeout.connect(self.update_statistics)
+        self.update_statistics_timer.start()
         
         class Listener(ic4.QueueSinkListener):
             def sink_connected(self, sink: ic4.QueueSink, image_type: ic4.ImageType, min_buffers_required: int) -> bool:
@@ -42,6 +48,7 @@ class Camera(QObject):
         self.sink = ic4.QueueSink(Listener())
 
 
+    def reload_device(self):
         appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
         self.device_file = appdata_directory + '/device.json'
         if QFileInfo.exists(self.device_file):
@@ -49,11 +56,12 @@ class Camera(QObject):
                 self.grabber.device_open_from_state_file(self.device_file)
                 self.onDeviceOpened()
             except ic4.IC4Exception as e:
-
-                QMessageBox.information(self, '', f'Loading last used device failed: {e}', QMessageBox.StandardButton.Ok)
+                QMessageBox.information(self.parent(), '', f'Loading last used device failed: {e}', QMessageBox.StandardButton.Ok)
     
 
     def closeEvent(self, ev: QCloseEvent):
+        self.update_statistics_timer.stop()
+
         if self.grabber.is_device_valid:
             self.grabber.device_save_state_to_file(self.device_file)
         if self.grabber.is_streaming:
@@ -61,7 +69,7 @@ class Camera(QObject):
         
         del(self.grabber)
         del(self.sink)
-        #del(self.device_property_map)
+        del(self.device_property_map)
     
 
     def onCloseDevice(self):
@@ -97,14 +105,12 @@ class Camera(QObject):
 
         dlg.exec()
     
-    def onUpdateStatisticsTimer(self, statistics_label):
+    def update_statistics(self):
         if not self.grabber.is_device_valid:
             return
-        
         try:
             stats = self.grabber.stream_statistics
             text = f'Frames Delivered: {stats.sink_delivered} Dropped: {stats.device_transmission_error}/{stats.device_underrun}/{stats.transform_underrun}/{stats.sink_underrun}'
-            statistics_label.setText(text)
             tooltip = (
                 f'Frames Delivered: {stats.sink_delivered}'
                 f'Frames Dropped:'
@@ -113,12 +119,12 @@ class Camera(QObject):
                 f'  Transform Underrun: {stats.transform_underrun}'
                 f'  Sink Underrun: {stats.sink_underrun}'
             )
-            statistics_label.setToolTip(tooltip)
+            self.statistics_update.emit(text, tooltip)
         except ic4.IC4Exception:
             pass
     
     def onDeviceLost(self):
-        QMessageBox.warning(self, '', f'The video capture device is lost!', QMessageBox.StandardButton.Ok)
+        QMessageBox.warning(self.parent(), '', f'The video capture device is lost!', QMessageBox.StandardButton.Ok)
 
         # stop video
 
@@ -133,9 +139,9 @@ class Camera(QObject):
         self.device_property_map.set_value(ic4.PropId.GAIN, 0)
         self.device_property_map.set_value(ic4.PropId.EXPOSURE_AUTO, 'Off')
         self.device_property_map.set_value(ic4.PropId.PIXEL_FORMAT, 'Mono 16')
-        self.width = self.device_property_map.get_value_int(ic4.PropId.WIDTH)
-        self.height = self.device_property_map.get_value_int(ic4.PropId.HEIGHT)
-        self.camera_opened.emit(
+        self.opened.emit(
+            self.device_property_map.get_value_int(ic4.PropId.WIDTH),
+            self.device_property_map.get_value_int(ic4.PropId.HEIGHT),
             self.device_property_map.get_value_int(ic4.PropId.WIDTH_MAX),
             self.device_property_map.get_value_int(ic4.PropId.HEIGHT_MAX),
             self.device_property_map.get_value_int(ic4.PropId.OFFSET_X),
@@ -153,9 +159,9 @@ class Camera(QObject):
     def updateCameraLabel(self):
         try:
             info = self.grabber.device_info
-            self.camera_label.setText(f'{info.model_name} {info.serial}')
+            self.label_update.emit(f'{info.model_name} {info.serial}')
         except ic4.IC4Exception:
-            self.camera_label.setText('No Device')
+            self.label_update.emit('No Device')
     
     def startStopStream(self):
         try:
@@ -166,6 +172,6 @@ class Camera(QObject):
                     self.grabber.stream_setup(self.sink)
 
         except ic4.IC4Exception as e:
-            QMessageBox.critical(self, '', f'{e}', QMessageBox.StandardButton.Ok)
+            QMessageBox.critical(self.parent(), '', f'{e}', QMessageBox.StandardButton.Ok)
 
         self.state_changed.emit()

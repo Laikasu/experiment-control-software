@@ -32,6 +32,7 @@ class VideoView(QGraphicsView):
         self.zoom_factor = 1.25
         self.current_scale = 1.0
         self.start_point = None
+        self.displacement_thresh = 10
 
         self._mode = "navigation"
     
@@ -52,14 +53,15 @@ class VideoView(QGraphicsView):
         
 
     
-    def set_size(self, width, height, offset_x, offset_y):
-        self.width = width
-        self.height = height
-        self.background.setRect(QRect(0, 0, width, height))
+    def set_size(self, width: int, height: int, max_width: int, max_height: int, offset_x: int, offset_y: int):
+        self.max_roi_width = max_width
+        self.max_roi_height = max_height
+        self.background.setRect(QRect(0, 0, max_width, max_height))
         self.camera_display.setOffset(QPoint(offset_x, offset_y))
-        self.centerOn(self.background.boundingRect().center())
         self.scale(0.25,0.25)
         self.current_scale *= 0.25
+        self.update_margins()
+        self.centerOn(self.background.boundingRect().center())
         
 
     def update_image(self, frame):
@@ -140,8 +142,8 @@ class VideoView(QGraphicsView):
             if self.mode == "roi":
                 # Start drawing a new rectangle
                 self.start_point = self.mapToScene(event.pos()).toPoint()
-                self.start_point.setX(np.round(np.clip(self.start_point.x(), 0, self.width)/16)*16)
-                self.start_point.setY(np.round(np.clip(self.start_point.y(), 0, self.height)/16)*16)
+                self.start_point.setX(np.round(np.clip(self.start_point.x(), 0, self.max_roi_width)/16)*16)
+                self.start_point.setY(np.round(np.clip(self.start_point.y(), 0, self.max_roi_height)/16)*16)
                 self.roi_graphic.show()
             if self.mode == "navigation":
                 super().mousePressEvent(event)
@@ -151,14 +153,14 @@ class VideoView(QGraphicsView):
             if self.mode == "move":
                 current_point = self.mapToScene(event.pos())
                 displacement = current_point - self.start_point
-                self.start_point = current_point
-                self.move_stage.emit(np.array(displacement.toTuple()))
+                if (displacement.x()**2 + displacement.y()**2) > self.displacement_thresh:
+                    self.start_point = current_point
+                    self.move_stage.emit(np.array(displacement.toTuple()))
 
             if self.mode == "roi":
                 # Update the graphic
                 end_point = self.mapToScene(event.pos()).toPoint()
-                end_point.setX(np.round(np.clip(end_point.x(), 0, self.width)/16)*16)
-                end_point.setY(np.round(np.clip(end_point.y(), 0, self.height)/16)*16)
+                end_point = self.calculate_endpoint(end_point)
                 rect = QRect(self.start_point, end_point).normalized()
                 self.roi_graphic.setRect(rect)
         return super().mouseMoveEvent(event)
@@ -171,10 +173,10 @@ class VideoView(QGraphicsView):
                 if self.mode == "roi":
                     # Update the graphic
                     end_point = self.mapToScene(event.pos()).toPoint()
-                    end_point.setX(np.round(np.clip(end_point.x(), 0, self.width)/16)*16 - 1)
-                    end_point.setY(np.round(np.clip(end_point.y(), 0, self.height)/16)*16 - 1)
+                    end_point = self.calculate_endpoint(end_point)
+                    end_point.setX(end_point.x()-1)
+                    end_point.setY(end_point.y()-1)
                     rect = QRect(self.start_point, end_point).normalized()
-                    self.roi_graphic.setRect(rect)
                     # Update roi and turn off roi mode
                     self.mode = "navigation"
                     self.start_point = None  # Reset start point
@@ -182,3 +184,32 @@ class VideoView(QGraphicsView):
                     self.roi_graphic.hide()
                     self.camera_display.setOffset(rect.topLeft())
         return super().mouseReleaseEvent(event)
+
+    def calculate_endpoint(self, end_point):
+        # Snap to grid
+        end_point.setX(np.round(np.clip(end_point.x(), 0, self.max_roi_width)/16)*16)
+        end_point.setY(np.round(np.clip(end_point.y(), 0, self.max_roi_height)/16)*16)
+
+        # Set minimum to 256
+        displacement = end_point - self.start_point
+        if displacement.x() < 256 and displacement.x() >= 0:
+            displacement.setX(256)
+        elif displacement.x() > -256 and displacement.x() < 0:
+            displacement.setX(-256)
+        if displacement.y() < 256 and displacement.y() >= 0:
+            displacement.setY(256)
+        elif displacement.y() > -256 and displacement.y() < 0:
+            displacement.setY(-256)
+        
+        # Bound within picture
+        end_point = self.start_point + displacement
+        if end_point.x() < 0:
+            end_point.setX(end_point.x() + 512)
+        elif end_point.x() > self.max_roi_width:
+            end_point.setX(end_point.x() - 512)
+        if end_point.y() < 0:
+            end_point.setY(end_point.y() + 512)
+        elif end_point.y() > self.max_roi_height:
+            end_point.setY(end_point.y() - 512)
+        
+        return end_point

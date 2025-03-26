@@ -3,15 +3,17 @@ from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
 
 import os
-import shutil
 import numpy as np
 import tifffile as tiff
 import cv2
 import time
 
+# Stage
 from pymmcore_plus import CMMCorePlus
-
+# Camera
 import imagingcontrol4 as ic4
+# Laser
+from nktlaser import Laser
 
 from widgets import VideoView
 import processing as pc
@@ -29,6 +31,7 @@ class PersistentWorkerThread(QThread):
 
 
 class MainWindow(QMainWindow):
+    processed_frame = Signal(np.ndarray)
     def __init__(self):
         application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
         QMainWindow.__init__(self)
@@ -39,9 +42,10 @@ class MainWindow(QMainWindow):
 
         mm_dir = 'C:/Program Files/Micro-Manager-2.0'
         self.setup_micromanager(mm_dir)
+
+        self.laser = Laser()
+        self.laser.set_emission(True)
         
-        
-        self.photos_received = 0
         self.grid = False
         self.got_image_mutex = QMutex()
         self.got_image = QWaitCondition()
@@ -64,7 +68,6 @@ class MainWindow(QMainWindow):
         self.backgrounds_directory = picture_directory + '/Backgrounds'
         QDir(self.backgrounds_directory).mkpath('.')
         self.save_videos_directory = video_directory
-
         
 
         self.video_view = VideoView(self)
@@ -75,15 +78,16 @@ class MainWindow(QMainWindow):
         self.camera = Camera(self)
         self.camera.new_frame.connect(self.update_display)
         self.camera.state_changed.connect(self.update_controls)
-        self.camera.camera_opened.connect(self.video_view.set_size)
+        self.camera.opened.connect(self.video_view.set_size)
+        self.camera.opened.connect(self.init_roi)
+        
 
         self.background: np.ndarray = None
         self.subtract_background = False
 
         self.createUI()
-        
-        
         self.update_controls()
+        self.camera.reload_device()
     
 
     def setup_micromanager(self, mm_dir):
@@ -158,6 +162,9 @@ class MainWindow(QMainWindow):
         self.snap_processed_photo_act.setStatusTip('Snap a single background subtracted photo')
         self.snap_processed_photo_act.triggered.connect(self.snap_processed_photo)
 
+        self.laser_sweep_act = QAction('Sweep Laser')
+        self.laser_sweep_act.triggered.connect(self.laser_sweep)
+
         self.z_sweep_act = QAction('Focus Sweep')
         self.z_sweep_act.setStatusTip('Perform a focus sweep')
         self.z_sweep_act.triggered.connect(self.z_sweep)
@@ -224,9 +231,11 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addAction(self.subtract_background_act)
         toolbar.addAction(self.snap_background_act)
+        toolbar.addAction(self.toggle_grid_act)
         toolbar.addSeparator()
         toolbar.addAction(self.snap_raw_photo_act)
         toolbar.addAction(self.snap_processed_photo_act)
+        toolbar.addAction(self.laser_sweep_act)
         #toolbar.addAction(self.z_sweep_act)
 
 
@@ -238,38 +247,44 @@ class MainWindow(QMainWindow):
         self.aquisition_label = QLabel('', self.statusBar())
         self.statusBar().addPermanentWidget(self.aquisition_label)
         self.statistics_label = QLabel('', self.statusBar())
+        self.camera.statistics_update.connect(lambda s1, s2: (self.statistics_label.setText(s1), self.statistics_label.setToolTip(s2)))
         self.statusBar().addPermanentWidget(self.statistics_label)
         self.statusBar().addPermanentWidget(QLabel('  '))
         self.camera_label = QLabel(self.statusBar())
         self.statusBar().addPermanentWidget(self.camera_label)
+        self.camera.label_update.connect(self.camera_label.setText)
+        
 
-        self.update_statistics_timer = QTimer()
-        self.update_statistics_timer.timeout.connect(partial(self.camera.onUpdateStatisticsTimer, self.statistics_label))
-        self.update_statistics_timer.start()
+        
 
     def update_controls(self):
         grabber = self.camera.grabber
         if not grabber.is_device_open:
             self.statistics_label.clear()
         
+        xy_stage_connected = not not self.xy_stage
+        xy_needed = self.grid
+        xy_okay = (xy_needed and xy_stage_connected) or not xy_needed
+
+        z_stage_connected = not not self.z_stage
+
         self.device_properties_act.setEnabled(grabber.is_device_valid and not self.aquiring)
         self.device_driver_properties_act.setEnabled(grabber.is_device_valid and not self.aquiring)
         self.start_live_act.setEnabled(grabber.is_device_valid and not self.aquiring)
         self.start_live_act.setChecked(grabber.is_streaming)
         self.video_act.setEnabled(grabber.is_streaming and not self.aquiring)
         self.close_device_act.setEnabled(grabber.is_device_open and not self.aquiring)
-        self.snap_background_act.setEnabled(grabber.is_streaming and not self.aquiring and self.xy_stage)
-        self.snap_processed_photo_act.setEnabled(grabber.is_streaming and not self.aquiring and self.xy_stage)
+        self.snap_background_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_okay)
+        self.snap_processed_photo_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_okay)
         self.snap_raw_photo_act.setEnabled(grabber.is_streaming and not self.aquiring)
-        self.z_sweep_act.setEnabled(grabber.is_streaming and not self.aquiring and not not self.z_stage and self.xy_stage)
-        self.set_roi_act.setEnabled(grabber.is_device_valid and not self.aquiring)
-        self.move_act.setEnabled(grabber.is_streaming and not self.aquiring and self.xy_stage)
+        self.z_sweep_act.setEnabled(grabber.is_streaming and not self.aquiring and z_stage_connected and xy_okay)
+        self.set_roi_act.setEnabled(grabber.is_device_valid and not self.video_view.background.rect().isEmpty() and not self.aquiring)
+        self.move_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_okay)
         self.move_act.setChecked(self.video_view.mode == 'move')
         self.set_roi_act.setChecked(self.video_view.mode == 'roi')
         self.subtract_background_act.setEnabled(self.background is not None)
 
     def closeEvent(self, ev: QCloseEvent):
-        self.update_statistics_timer.stop()
         self.camera.closeEvent(ev)
     
     #==============================================#
@@ -307,12 +322,13 @@ class MainWindow(QMainWindow):
         def __init__(self, parent, func, *args):
             super().__init__(parent)
             self.args = args
+            self.photos = []
             self.func = func
             self.parent = parent
-            self.parent.aquiring_mutex.lock()
-            self.parent.aquiring = True
-            self.parent.aquiring_mutex.unlock()
-            self.parent.update_controls()
+            parent.aquiring_mutex.lock()
+            parent.aquiring = True
+            parent.aquiring_mutex.unlock()
+            parent.update_controls()
 
         def run(self):
             self.func(*self.args)
@@ -326,7 +342,6 @@ class MainWindow(QMainWindow):
             self.parent.update_controls()
 
     def take_sequence(self):
-        
         distance = 10
         positions = np.array([[0,0], [1,0], [1,1], [0,1]])*distance
         anchor = np.array(self.mmc.getXYPosition(self.xy_stage))
@@ -336,7 +351,7 @@ class MainWindow(QMainWindow):
             self.mmc.waitForDevice(self.xy_stage)
             time.sleep(0.1)
             # shoot photo and wait for it to be shot
-            self.camera.new_frame.connect(partial(self.store_sequence_image, i), Qt.ConnectionType.SingleShotConnection)
+            self.camera.new_frame.connect(self.store_sequence_image, Qt.ConnectionType.SingleShotConnection)
             self.got_image_mutex.lock()
             self.got_image.wait(self.got_image_mutex)
             self.got_image_mutex.unlock()
@@ -344,8 +359,8 @@ class MainWindow(QMainWindow):
         # Return to base
         self.mmc.setXYPosition(anchor[0], anchor[1])
 
-    def store_sequence_image(self, i, image: np.ndarray):
-        self.photos[i] = image
+    def store_sequence_image(self, image: np.ndarray):
+        self.photos.append(image)
         self.got_image.wakeAll()
     
     def toggle_video(self, start: bool):
@@ -355,46 +370,49 @@ class MainWindow(QMainWindow):
             self.stop_video()
 
     def start_video(self):
-        print('start')
-        self.aquiring_mutex.lock()
-        self.aquiring = True
-        self.aquiring_mutex.unlock()
-        self.update_controls()
+        self.photos = []
+        self.processed_frame.connect(self.write_frame)
 
-        self.temp_video_file = QTemporaryFile()
-        self.temp_video_file.open()
-        print(self.temp_video_file.fileName())
-        fps = self.camera.device_property_map.get_value_int(ic4.PropId.ACQUISITION_FRAME_RATE)
-        self.writer = cv2.VideoWriter(self.temp_video_file.fileName, cv2.VideoWriter_fourcc(*'MP4V'), fps, (self.width, self.height))
-        self.camera.new_frame.connect(partial(self.write_frame, self.writer))
-
-    def write_frame(self, writer, frame: np.ndarray):
-        writer.write(frame)
+    def write_frame(self, frame: np.ndarray):
+        self.photos.append(frame)
     
     def stop_video(self):
-        print('stop')
-        if (self.temp_video_file is not None):
-            self.camera.new_frame.disconnect()
-            self.writer.release()
-            self.temp_video_file.close()
-            self.aquiring_mutex.lock()
-            self.aquiring = False
-            self.aquiring_mutex.unlock()
-            self.update_controls()
+        self.processed_frame.disconnect(self.write_frame)
 
-            dialog = QFileDialog(self, 'Save Video')
-            dialog.setNameFilter('MP4 (*.mp4)')
-            dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-            dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-            dialog.setDirectory(self.save_videos_directory)
-            if dialog.exec():
-                filepath = dialog.selectedFiles()[0]
+        dialog = QFileDialog(self, 'Save Video')
+        dialog.setNameFilters(('Multi Page TIF (*.tif)', 'AVI Video (*.avi)'))
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setDirectory(self.save_videos_directory)
+        if dialog.exec():
+
+            filepath = dialog.selectedFiles()[0]
+            nameFilter = dialog.selectedNameFilter()
+            if '.tif' in nameFilter:
+                if not filepath.lower().endswith('.tif'):
+                    filepath += '.tif'
+
+                photos = np.array(self.photos)
+                if photos.dtype == np.uint16:
+                    photos = (photos/256).astype(np.uint8)
                 
-                if not filepath.lower().endswith('.mp4'):
-                    filepath += '.mp4'
+                tiff.imwrite(filepath, np.array(self.photos))
+
+            elif '.avi' in nameFilter:
+                fps = int(self.camera.device_property_map.get_value_float(ic4.PropId.ACQUISITION_FRAME_RATE))
+                if not filepath.lower().endswith('.avi'):
+                    filepath += '.avi'
+                self.writer = cv2.VideoWriter(filepath, cv2.VideoWriter_fourcc(*'XVID'), fps, (self.roi_width, self.roi_height), False)
+            
+                for photo in self.photos:
+                    # Image writer only support uint8
+                    if photo.dtype == np.uint16:
+                        self.writer.write((photo/256).astype(np.uint8))
+                    elif (photo.dtype ==np.uint8):
+                        self.writer.write(photo)
+
                 
-                shutil.copy2(self.temp_video_file.fileName(), filepath)
-                self.temp_video_file = None
+                self.writer.release()
 
 
 
@@ -403,7 +421,7 @@ class MainWindow(QMainWindow):
 
     def snap_background(self):
         if self.grid:
-            self.photos = np.zeros((4, self.height, self.width, 1), dtype=np.uint16)
+            self.photos = []
             if not self.aquiring:
                 self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_sequence)
                 self.aquisition_worker.done.connect(self.set_background)
@@ -411,14 +429,16 @@ class MainWindow(QMainWindow):
         else:
             self.camera.new_frame.connect(self.set_background, Qt.ConnectionType.SingleShotConnection)
     
-    def set_background(self, image: np.ndarray):
-        print(f'image has {image.ndim} dimensions.')
-        self.background = pc.common_background(image) if image.ndim == 3 else image
+    def set_background(self, image: np.ndarray=None):
+        if image is not None:
+            self.background = image
+        else:
+            self.background = pc.common_background(self.photos)
         self.update_controls()
 
     def snap_processed_photo(self):
         if self.grid:
-            self.photos = np.zeros((4, self.height, self.width, 1), dtype=np.uint16)
+            self.photos = []
             if not self.aquiring:
                 self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_sequence)
                 self.aquisition_worker.done.connect(self.save_processed_photo)
@@ -446,9 +466,62 @@ class MainWindow(QMainWindow):
             # also contains raw data
             tiff.imwrite(full_path, pc.float_to_mono(diff))
             np.save(os.path.splitext(full_path)[0] + '_raw.npy', self.photos)
-            np.save(os.path.splitext(full_path)[0] + '.npy', diff)
 
+    def laser_sweep(self):
+        if not self.aquiring:
+            self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_laser_sweep)
+            self.aquisition_worker.start()
+            self.aquisition_worker.done.connect(self.save_laser_data)
+        self.update_controls()
+
+    def take_laser_sweep(self):
+        N = 20
+        wavelens = np.linspace(450, 550, N)
+        self.laser.set_middle(wavelens[0])
+        time.sleep(5)
+        self.laser_data_raw = []
+        for i, wavelen in enumerate(wavelens):
+            self.aquisition_label.setText(f'Aquiring Data: laser sweep progression {i+1}/{N}')
+            self.laser.set_middle(wavelen)
+            time.sleep(0.5)
+            if self.grid:
+                self.photos = []
+                self.take_sequence()
+                self.laser_data_raw.append(self.photos)
+            else:
+                self.camera.new_frame.connect(self.store_laser_data, Qt.ConnectionType.SingleShotConnection)
+                self.got_image_mutex.lock()
+                self.got_image.wait(self.got_image_mutex)
+                self.got_image_mutex.unlock()
+        
+        self.aquisition_label.setText('Calculating Images')
     
+    def store_laser_data(self, image: np.ndarray):
+        self.laser_data_raw.append(image)
+        self.got_image.wakeAll()
+    
+    def save_laser_data(self):
+        dialog = QFileDialog(self, 'Save Sweep')
+        dialog.setNameFilter('TIFF image sequence (*.tif)')
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setDirectory(self.save_videos_directory)
+        if dialog.exec():
+            filepath = dialog.selectedFiles()[0]
+            if not filepath.lower().endswith('.tif'):
+                filepath += '.tif'
+            
+            images = np.array(self.laser_data_raw)
+
+            if np.shape(images)[1] == 4:
+                diff = np.array([pc.background_subtracted(photos[0], pc.common_background(photos)) for photos in images])
+                images = pc.float_to_mono(diff)
+
+            tiff.imwrite(filepath, images)
+
+
+
+
     def z_sweep(self):
         if not self.aquiring:
             self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_z_sweep)
@@ -460,10 +533,10 @@ class MainWindow(QMainWindow):
         N = 100
         z_positions = np.linspace(-5, 5, N)
         
-        z_data_raw = np.zeros((N, 4, self.height, self.width, 1), dtype=np.uint16)
+        z_data_raw = np.zeros((N, 4, self.roi_height, self.roi_width, 1), dtype=np.uint16)
         for i, z in enumerate(z_positions):
             self.aquisition_label.setText(f'Aquiring Data: z sweep progression {i+1}/{N}')
-            self.photos = np.zeros((4, self.height, self.width, 1))
+            self.photos = np.zeros((4, self.roi_height, self.roi_width, 1))
             pos = z_zero + z
             self.z_position = i
             self.mmc.setZPosition(pos)
@@ -477,7 +550,7 @@ class MainWindow(QMainWindow):
 
     
     def save_z_sweep(self, z_data_raw):
-        z_data = np.zeros((len(z_data_raw), self.height, self.width, 1), dtype=np.float64)
+        z_data = np.zeros((len(z_data_raw), self.roi_height, self.roi_width, 1), dtype=np.float64)
         name = os.path.join(self.data_directory, 'z_sweep_0')
         n = 1
         while os.path.isdir(name):
@@ -499,7 +572,12 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage('Done!')
 
 
+    
+    def init_roi(self, width, height, max_width, max_height, offset_x, offset_y):
+        self.roi_width = width
+        self.roi_height = height
 
+    
     def update_roi(self, roi):
         # Set ROI in camera
         self.camera.startStopStream()
@@ -508,8 +586,8 @@ class MainWindow(QMainWindow):
         self.camera.device_property_map.set_value(ic4.PropId.OFFSET_X, int(roi.left()))
         self.camera.device_property_map.set_value(ic4.PropId.OFFSET_Y, int(roi.top()))
         self.camera.startStopStream()
-        self.width = roi.width()
-        self.height = roi.height()
+        self.roi_width = roi.width()
+        self.roi_height = roi.height()
 
         # Go out of roi mode in UI
         self.update_controls()
@@ -535,4 +613,5 @@ class MainWindow(QMainWindow):
             # (reference + signal) / reference
             diff = pc.background_subtracted(frame, self.background)
             frame = pc.float_to_mono(diff)
+        self.processed_frame.emit(frame)
         self.video_view.update_image(frame)
