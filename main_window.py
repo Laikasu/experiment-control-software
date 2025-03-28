@@ -1,6 +1,6 @@
 from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, Signal, QThread, QWaitCondition, QMutex, QTemporaryFile
 from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
-from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar, QPushButton
+from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar, QPushButton, QInputDialog
 
 import os
 import numpy as np
@@ -16,7 +16,7 @@ import imagingcontrol4 as ic4
 # Laser
 from nktlaser import Laser
 
-from widgets import VideoView
+from widgets import VideoView, SweepDialog
 import processing as pc
 from camera import Camera
 
@@ -171,7 +171,7 @@ class MainWindow(QMainWindow):
         self.z_sweep_act.triggered.connect(self.z_sweep)
 
         self.video_act = QAction(QIcon(application_path + "images/recordstart.png"), "&Capture Video", self)
-        self.video_act.setToolTip("Capture video into MP4 file")
+        self.video_act.setToolTip("Capture Video")
         self.video_act.setCheckable(True)
         self.video_act.toggled.connect(self.toggle_video)
 
@@ -479,15 +479,18 @@ class MainWindow(QMainWindow):
     # Make a laser sweep
 
     def laser_sweep(self):
-        if not self.aquiring:
+        bandwidth = self.laser.bandwith
+        band_radius = self.laser.bandwith/2
+        dialog = SweepDialog(self, title="Laser Sweep Data", limits=(475+band_radius, 850-bandwidth, 475+bandwidth, 850-band_radius), defaults=(600, 700, 10), unit="nm")
+        if dialog.exec() and not self.aquiring:
+            self.wavelens = np.linspace(*dialog.get_values())
             self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_laser_sweep)
             self.aquisition_worker.done.connect(self.save_laser_data)
             self.aquisition_worker.start()
             
 
     def take_laser_sweep(self):
-        N = 20
-        self.wavelens = np.linspace(450, 550, N)
+        N = len(self.wavelens)
         self.laser.set_wavelen(self.wavelens[0])
         time.sleep(5)
         self.laser_data_raw = []
@@ -545,15 +548,16 @@ class MainWindow(QMainWindow):
     # Make a Z sweep
 
     def z_sweep(self):
-        if not self.aquiring:
+        dialog = SweepDialog(self, title="Z Sweep Data", limits=(-10, 10, -10, 10), defaults=(0, 1, 10), unit="micron")
+        if dialog.exec() and not self.aquiring:
+            self.z_positions = np.linspace(*dialog.get_values())
             self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_z_sweep)
             self.aquisition_worker.done.connect(self.save_z_data)
             self.aquisition_worker.start()
     
     def take_z_sweep(self):
         z_zero = self.mmc.getZPosition()
-        N = 100
-        self.z_positions = np.linspace(-5, 5, N)
+        N = len(self.z_positions)
         
         self.z_data_raw = []
         for i, z in enumerate(self.z_positions):

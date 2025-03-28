@@ -1,8 +1,40 @@
 from PySide6.QtCore import QRect, QMargins, Qt, QPoint, Signal
 from PySide6.QtGui import QPixmap, QImage, QPen, QBrush
-from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsRectItem
+from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsRectItem, QDialog, QFormLayout, QSpinBox, QDoubleSpinBox, QVBoxLayout, QHBoxLayout, QPushButton, QDialogButtonBox
 
 import numpy as np
+
+class SweepDialog(QDialog):
+    def __init__(self, parent, title: str, limits, defaults, unit):
+        super().__init__(parent=parent)
+        self.setWindowTitle(title)
+
+        self.start = QDoubleSpinBox(minimum=limits[0], maximum=limits[1], singleStep=10, decimals=1, suffix=f" {unit}")
+        self.start.setValue(defaults[0])
+        self.end = QDoubleSpinBox(minimum=limits[2], maximum=limits[3], singleStep=10, decimals=1, suffix=f" {unit}")
+        self.end.setValue(defaults[1])
+        self.number = QSpinBox(minimum=10, maximum=200, singleStep=10)
+        self.number.setValue(defaults[2])
+        layout = QFormLayout()
+        layout.addRow("Start", self.start)
+        layout.addRow("End", self.end)
+        layout.addRow("Number", self.number)
+
+        # Buttons
+        self.cancel_button = QPushButton("Cancel")
+        self.submit_button = QPushButton("Start")
+
+        self.button_box = QDialogButtonBox( QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+
+        dialog_layout = QVBoxLayout()
+        dialog_layout.addLayout(layout)
+        dialog_layout.addWidget(self.button_box)
+        self.setLayout(dialog_layout)
+    
+    def get_values(self):
+        return self.start.value(), self.end.value(), self.number.value()
 
 class VideoView(QGraphicsView):
     roi_set = Signal(QRect)
