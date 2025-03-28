@@ -95,6 +95,7 @@ class MainWindow(QMainWindow):
         application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
         self.xy_stage = None
         self.z_stage = None
+        
         self.mmc = CMMCorePlus.instance()
         try:
             self.mmc.setDeviceAdapterSearchPaths([mm_dir])
@@ -229,6 +230,7 @@ class MainWindow(QMainWindow):
         self.addToolBar(Qt.TopToolBarArea, toolbar)
         toolbar.addAction(self.device_select_act)
         toolbar.addAction(self.device_properties_act)
+        toolbar.addAction(self.grab_release_laser_act)
         toolbar.addSeparator()
         toolbar.addAction(self.start_live_act)
         toolbar.addAction(self.video_act)
@@ -243,11 +245,10 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.snap_raw_photo_act)
         toolbar.addAction(self.snap_processed_photo_act)
         toolbar.addAction(self.laser_sweep_act)
+        toolbar.addAction(self.z_sweep_act)
         # button = QPushButton("metadata", toolbar)
         # button.clicked.connect(self.generate_metadata)
         # toolbar.addWidget(button)
-        toolbar.addAction(self.grab_release_laser_act)
-        #toolbar.addAction(self.z_sweep_act)
 
 
 
@@ -288,7 +289,7 @@ class MainWindow(QMainWindow):
         self.snap_background_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_okay)
         self.snap_processed_photo_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_okay)
         self.snap_raw_photo_act.setEnabled(grabber.is_streaming and not self.aquiring)
-        self.z_sweep_act.setEnabled(grabber.is_streaming and not self.aquiring and z_stage_connected and xy_okay)
+        self.z_sweep_act.setEnabled(grabber.is_streaming and not self.aquiring and z_stage_connected and xy_okay and self.laser.open)
         self.set_roi_act.setEnabled(grabber.is_device_valid and not self.video_view.background.rect().isEmpty() and not self.aquiring)
         self.move_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_okay)
         self.move_act.setChecked(self.video_view.mode == 'move')
@@ -351,14 +352,14 @@ class MainWindow(QMainWindow):
             self.parent.update_controls()
 
     def take_sequence(self):
-        distance = 10
+        distance = 4
         positions = np.array([[0,0], [1,0], [1,1], [0,1]])*distance
         anchor = np.array(self.mmc.getXYPosition(self.xy_stage))
         for i, position in enumerate(positions):
             pos = position + anchor
             self.mmc.setXYPosition(pos[0], pos[1])
             self.mmc.waitForDevice(self.xy_stage)
-            time.sleep(0.1)
+            time.sleep(0.2)
             # shoot photo and wait for it to be shot
             self.camera.new_frame.connect(self.store_sequence_image, Qt.ConnectionType.SingleShotConnection)
             self.got_image_mutex.lock()
@@ -535,7 +536,7 @@ class MainWindow(QMainWindow):
             tiff.imwrite(filepath + '.tif', images)
 
             metadata = self.generate_metadata()
-            metadata['Laser.wavelength'] = {
+            metadata['Laser.wavelength [nm]'] = {
                 "Start": int(self.wavelens[0]),
                 "Stop": int(self.wavelens[-1]),
                 "Number": len(self.wavelens)}
@@ -609,11 +610,12 @@ class MainWindow(QMainWindow):
             tiff.imwrite(filepath + '.tif', images)
 
             metadata = self.generate_metadata()
-            metadata['Setup.z_focus'] = {
+            metadata['Setup.z_focus [um]'] = {
                 "Start": int(self.z_positions[0]),
                 "Stop": int(self.z_positions[-1]),
                 "Number": len(self.z_positions)}
-            with open(filepath+'.yaml', 'w') as file:
+            
+            with open(filepath +'.yaml', 'w') as file:
                 yaml.dump(metadata, file)
         self.data_directory = dialog.directory()
         self.aquisition_label.setText('')
@@ -634,6 +636,8 @@ class MainWindow(QMainWindow):
         self.camera.startStopStream()
         self.roi_width = roi.width()
         self.roi_height = roi.height()
+        self.subtract_background = False
+        self.background = None
 
         # Go out of roi mode in UI
         self.update_controls()
@@ -671,8 +675,8 @@ class MainWindow(QMainWindow):
             exposure_time = int(self.camera.device_property_map.get_value_float(ic4.PropId.EXPOSURE_TIME))
         return({
             "Camera.fps": self.camera.device_property_map.get_value_float(ic4.PropId.ACQUISITION_FRAME_RATE),
-            "Camera.exposure_time": exposure_time,
-            "Laser.wavelength": self.laser.wavelen,
-            "Laser.bandwith": self.laser.bandwith,
-            "Laser.frequency": self.laser.get_frequency()
+            "Camera.exposure_time [us]": exposure_time,
+            "Laser.wavelength [nm]": self.laser.wavelen,
+            "Laser.bandwith [nm]": self.laser.bandwith,
+            "Laser.frequency [kHz]": self.laser.get_frequency()
         })

@@ -6,4 +6,4 @@ qtpy
 pymmcore-plus
 tifffile
 opencv-python
-nkt-tools
+pyyaml

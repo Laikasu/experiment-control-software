@@ -59,7 +59,7 @@ class Laser(QObject):
             self.grab()
     
     def get_frequency(self) -> int:
-        return nkt.registerReadU32('COM4', 1, 0x71, -1)[1]
+        return nkt.registerReadU32('COM4', 1, 0x71, -1)[1]/1000
 
     def __del__(self):
         nkt.closePorts('COM4')
