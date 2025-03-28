@@ -1,12 +1,13 @@
 from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, Signal, QThread, QWaitCondition, QMutex, QTemporaryFile
 from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
-from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
+from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar, QPushButton
 
 import os
 import numpy as np
 import tifffile as tiff
 import cv2
 import time
+import yaml
 
 # Stage
 from pymmcore_plus import CMMCorePlus
@@ -31,7 +32,7 @@ class PersistentWorkerThread(QThread):
 
 
 class MainWindow(QMainWindow):
-    processed_frame = Signal(np.ndarray)
+    new_processed_frame = Signal(np.ndarray)
     def __init__(self):
         application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
         QMainWindow.__init__(self)
@@ -43,8 +44,8 @@ class MainWindow(QMainWindow):
         mm_dir = 'C:/Program Files/Micro-Manager-2.0'
         self.setup_micromanager(mm_dir)
 
-        self.laser = Laser()
-        self.laser.set_emission(True)
+        self.laser = Laser(self)
+        self.laser.changedState.connect(self.update_controls)
         
         self.grid = False
         self.got_image_mutex = QMutex()
@@ -180,6 +181,12 @@ class MainWindow(QMainWindow):
         self.toggle_grid_act.toggled.connect(lambda value: setattr(self, 'grid', value))
 
 
+        self.grab_release_laser_act = QAction('Open laser')
+        self.grab_release_laser_act.setCheckable(True)
+        self.grab_release_laser_act.triggered.connect(self.laser.toggle_laser)
+
+
+
         exit_act = QAction('E&xit', self)
         exit_act.setShortcut(QKeySequence.Quit)
         exit_act.setStatusTip('Exit program')
@@ -236,6 +243,10 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.snap_raw_photo_act)
         toolbar.addAction(self.snap_processed_photo_act)
         toolbar.addAction(self.laser_sweep_act)
+        # button = QPushButton("metadata", toolbar)
+        # button.clicked.connect(self.generate_metadata)
+        # toolbar.addWidget(button)
+        toolbar.addAction(self.grab_release_laser_act)
         #toolbar.addAction(self.z_sweep_act)
 
 
@@ -283,6 +294,8 @@ class MainWindow(QMainWindow):
         self.move_act.setChecked(self.video_view.mode == 'move')
         self.set_roi_act.setChecked(self.video_view.mode == 'roi')
         self.subtract_background_act.setEnabled(self.background is not None)
+        self.laser_sweep_act.setEnabled(self.laser.open and not self.aquiring and grabber.is_streaming)
+        self.grab_release_laser_act.setChecked(self.laser.open)
 
     def closeEvent(self, ev: QCloseEvent):
         self.camera.closeEvent(ev)
@@ -296,7 +309,7 @@ class MainWindow(QMainWindow):
         self.camera.new_frame.connect(self.save_image, Qt.ConnectionType.SingleShotConnection)
     
 
-    def save_image(self, image: np.ndarray, processed = False):
+    def save_image(self, image: np.ndarray):
         dialog = QFileDialog(self, 'Save Photo')
         dialog.setNameFilter('TIFF (*.tif)')
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
@@ -304,14 +317,10 @@ class MainWindow(QMainWindow):
         dialog.setDirectory(self.data_directory)
 
         if dialog.exec():
-            full_path = dialog.selectedFiles()[0]
-            self.data_directory = QFileInfo(full_path).absolutePath()
-            if processed and self.background is not None:
-                diff = pc.background_subtracted(image, self.background)
-                image = pc.float_to_mono(diff)
-
-
-            tiff.imwrite(full_path, image)
+            filepath = dialog.selectedFiles()[0]
+            filepath = os.path.splitext(filepath)[0]
+            tiff.imwrite(filepath + '.tif', image)
+        self.data_directory = dialog.directory()
 
 
 
@@ -371,13 +380,13 @@ class MainWindow(QMainWindow):
 
     def start_video(self):
         self.photos = []
-        self.processed_frame.connect(self.write_frame)
+        self.new_processed_frame.connect(self.write_frame)
 
     def write_frame(self, frame: np.ndarray):
         self.photos.append(frame)
     
     def stop_video(self):
-        self.processed_frame.disconnect(self.write_frame)
+        self.new_processed_frame.disconnect(self.write_frame)
 
         dialog = QFileDialog(self, 'Save Video')
         dialog.setNameFilters(('Multi Page TIF (*.tif)', 'AVI Video (*.avi)'))
@@ -387,23 +396,19 @@ class MainWindow(QMainWindow):
         if dialog.exec():
 
             filepath = dialog.selectedFiles()[0]
+            filepath = os.path.splitext(filepath)[0]
             nameFilter = dialog.selectedNameFilter()
             if '.tif' in nameFilter:
-                if not filepath.lower().endswith('.tif'):
-                    filepath += '.tif'
-
                 photos = np.array(self.photos)
                 if photos.dtype == np.uint16:
                     photos = (photos/256).astype(np.uint8)
                 
-                tiff.imwrite(filepath, np.array(self.photos))
+                tiff.imwrite(filepath + '.tif', np.array(self.photos))
 
             elif '.avi' in nameFilter:
                 fps = int(self.camera.device_property_map.get_value_float(ic4.PropId.ACQUISITION_FRAME_RATE))
-                if not filepath.lower().endswith('.avi'):
-                    filepath += '.avi'
-                self.writer = cv2.VideoWriter(filepath, cv2.VideoWriter_fourcc(*'XVID'), fps, (self.roi_width, self.roi_height), False)
-            
+                self.writer = cv2.VideoWriter(filepath + '.avi', cv2.VideoWriter_fourcc(*'XVID'), fps, (self.roi_width, self.roi_height), False)
+
                 for photo in self.photos:
                     # Image writer only support uint8
                     if photo.dtype == np.uint16:
@@ -413,6 +418,7 @@ class MainWindow(QMainWindow):
 
                 
                 self.writer.release()
+        self.save_videos_directory = dialog.directory()
 
 
 
@@ -435,6 +441,8 @@ class MainWindow(QMainWindow):
         else:
             self.background = pc.common_background(self.photos)
         self.update_controls()
+    
+    # Background subtracted photos
 
     def snap_processed_photo(self):
         if self.grid:
@@ -445,7 +453,7 @@ class MainWindow(QMainWindow):
                 self.aquisition_worker.start()
         else:
             # Snap single picture
-            self.camera.new_frame.connect(partial(self.save_image, processed=True), Qt.ConnectionType.SingleShotConnection)
+            self.new_processed_frame.connect(self.save_image, Qt.ConnectionType.SingleShotConnection)
 
     def save_processed_photo(self):
         dialog = QFileDialog(self, 'Save Photo')
@@ -454,8 +462,8 @@ class MainWindow(QMainWindow):
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         dialog.setDirectory(self.data_directory)
         if dialog.exec():
-            full_path = dialog.selectedFiles()[0]
-            self.data_directory = QFileInfo(full_path).absolutePath()
+            filepath = dialog.selectedFiles()[0]
+            filepath = os.path.splitext(filepath)[0]
             
             background = pc.common_background(self.photos)
             data = self.photos[0]
@@ -464,8 +472,11 @@ class MainWindow(QMainWindow):
 
             
             # also contains raw data
-            tiff.imwrite(full_path, pc.float_to_mono(diff))
-            np.save(os.path.splitext(full_path)[0] + '_raw.npy', self.photos)
+            tiff.imwrite(filepath + '.tif', pc.float_to_mono(diff))
+            np.save(os.path.splitext(filepath)[0] + '_raw.npy', self.photos)
+        self.data_directory = dialog.directory()
+
+    # Make a laser sweep
 
     def laser_sweep(self):
         if not self.aquiring:
@@ -476,18 +487,19 @@ class MainWindow(QMainWindow):
 
     def take_laser_sweep(self):
         N = 20
-        wavelens = np.linspace(450, 550, N)
-        self.laser.set_middle(wavelens[0])
+        self.wavelens = np.linspace(450, 550, N)
+        self.laser.set_wavelen(self.wavelens[0])
         time.sleep(5)
         self.laser_data_raw = []
-        for i, wavelen in enumerate(wavelens):
+        for i, wavelen in enumerate(self.wavelens):
             self.aquisition_label.setText(f'Aquiring Data: laser sweep progression {i+1}/{N}')
-            self.laser.set_middle(wavelen)
+            self.laser.set_wavelen(wavelen)
             time.sleep(0.5)
             if self.grid:
                 self.photos = []
                 self.take_sequence()
                 self.laser_data_raw.append(self.photos)
+                self.background = pc.common_background(self.photos)
             else:
                 self.camera.new_frame.connect(self.store_laser_data, Qt.ConnectionType.SingleShotConnection)
                 self.got_image_mutex.lock()
@@ -505,11 +517,10 @@ class MainWindow(QMainWindow):
         dialog.setNameFilter('TIFF image sequence (*.tif)')
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setDirectory(self.save_videos_directory)
+        dialog.setDirectory(self.data_directory)
         if dialog.exec():
             filepath = dialog.selectedFiles()[0]
-            if not filepath.lower().endswith('.tif'):
-                filepath += '.tif'
+            filepath = os.path.splitext(filepath)[0]
             
             images = np.array(self.laser_data_raw)
 
@@ -517,10 +528,18 @@ class MainWindow(QMainWindow):
                 diff = np.array([pc.background_subtracted(photos[0], pc.common_background(photos)) for photos in images])
                 images = pc.float_to_mono(diff)
 
-            tiff.imwrite(filepath, images)
+            tiff.imwrite(filepath + '.tif', images)
 
+            metadata = self.generate_metadata()
+            metadata['Laser.wavelength'] = {
+                "Start": int(self.wavelens[0]),
+                "Stop": int(self.wavelens[-1]),
+                "Number": len(self.wavelens)}
+            with open(filepath+'.yaml', 'w') as file:
+                yaml.dump(metadata, file)
+        self.data_directory = dialog.directory()
 
-
+    # Make a Z sweep
 
     def z_sweep(self):
         if not self.aquiring:
@@ -547,7 +566,6 @@ class MainWindow(QMainWindow):
         self.mmc.setZPosition(z_zero)
         self.aquisition_label.setText('Calculating Images')
         self.save_z_sweep(z_data_raw)
-
     
     def save_z_sweep(self, z_data_raw):
         z_data = np.zeros((len(z_data_raw), self.roi_height, self.roi_width, 1), dtype=np.float64)
@@ -567,16 +585,13 @@ class MainWindow(QMainWindow):
             tiff.imwrite(os.path.join(name, f'z_sweep_{i}.tif'), pc.float_to_mono(diff))
         np.save(os.path.join(name, 'data.npy'), z_data)
         np.save(os.path.join(name, 'data_raw.npy'), z_data_raw)
-        #self.device_property_map.get_value_int(ic4.PropId.EXPOSURE_TIME)
         self.aquisition_label.setText('')
         self.statusBar().showMessage('Done!')
-
 
     
     def init_roi(self, width, height, max_width, max_height, offset_x, offset_y):
         self.roi_width = width
         self.roi_height = height
-
     
     def update_roi(self, roi):
         # Set ROI in camera
@@ -613,5 +628,20 @@ class MainWindow(QMainWindow):
             # (reference + signal) / reference
             diff = pc.background_subtracted(frame, self.background)
             frame = pc.float_to_mono(diff)
-        self.processed_frame.emit(frame)
+        self.new_processed_frame.emit(frame)
         self.video_view.update_image(frame)
+
+    
+    def generate_metadata(self) -> dict:
+        exposure_auto = self.camera.device_property_map.get_value_bool(ic4.PropId.EXPOSURE_AUTO)
+        if exposure_auto:
+            exposure_time = "auto"
+        else:
+            exposure_time = int(self.camera.device_property_map.get_value_float(ic4.PropId.EXPOSURE_TIME))
+        return({
+            "Camera.fps": self.camera.device_property_map.get_value_float(ic4.PropId.ACQUISITION_FRAME_RATE),
+            "Camera.exposure_time": exposure_time,
+            "Laser.wavelength": self.laser.wavelen,
+            "Laser.bandwith": self.laser.bandwith,
+            "Laser.frequency": self.laser.get_frequency()
+        })
