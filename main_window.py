@@ -1,6 +1,6 @@
 from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, Signal, QThread, QWaitCondition, QMutex, QTemporaryFile
 from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
-from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar, QPushButton
+from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar, QPushButton, QInputDialog
 
 import os
 import numpy as np
@@ -16,7 +16,7 @@ import imagingcontrol4 as ic4
 # Laser
 from nktlaser import Laser
 
-from widgets import VideoView
+from widgets import VideoView, SweepDialog
 import processing as pc
 from camera import Camera
 
@@ -95,6 +95,7 @@ class MainWindow(QMainWindow):
         application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
         self.xy_stage = None
         self.z_stage = None
+        
         self.mmc = CMMCorePlus.instance()
         try:
             self.mmc.setDeviceAdapterSearchPaths([mm_dir])
@@ -171,7 +172,7 @@ class MainWindow(QMainWindow):
         self.z_sweep_act.triggered.connect(self.z_sweep)
 
         self.video_act = QAction(QIcon(application_path + "images/recordstart.png"), "&Capture Video", self)
-        self.video_act.setToolTip("Capture video into MP4 file")
+        self.video_act.setToolTip("Capture Video")
         self.video_act.setCheckable(True)
         self.video_act.toggled.connect(self.toggle_video)
 
@@ -229,6 +230,7 @@ class MainWindow(QMainWindow):
         self.addToolBar(Qt.TopToolBarArea, toolbar)
         toolbar.addAction(self.device_select_act)
         toolbar.addAction(self.device_properties_act)
+        toolbar.addAction(self.grab_release_laser_act)
         toolbar.addSeparator()
         toolbar.addAction(self.start_live_act)
         toolbar.addAction(self.video_act)
@@ -243,11 +245,10 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.snap_raw_photo_act)
         toolbar.addAction(self.snap_processed_photo_act)
         toolbar.addAction(self.laser_sweep_act)
+        toolbar.addAction(self.z_sweep_act)
         # button = QPushButton("metadata", toolbar)
         # button.clicked.connect(self.generate_metadata)
         # toolbar.addWidget(button)
-        toolbar.addAction(self.grab_release_laser_act)
-        #toolbar.addAction(self.z_sweep_act)
 
 
 
@@ -288,7 +289,7 @@ class MainWindow(QMainWindow):
         self.snap_background_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_okay)
         self.snap_processed_photo_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_okay)
         self.snap_raw_photo_act.setEnabled(grabber.is_streaming and not self.aquiring)
-        self.z_sweep_act.setEnabled(grabber.is_streaming and not self.aquiring and z_stage_connected and xy_okay)
+        self.z_sweep_act.setEnabled(grabber.is_streaming and not self.aquiring and z_stage_connected and xy_okay and self.laser.open)
         self.set_roi_act.setEnabled(grabber.is_device_valid and not self.video_view.background.rect().isEmpty() and not self.aquiring)
         self.move_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_okay)
         self.move_act.setChecked(self.video_view.mode == 'move')
@@ -351,14 +352,14 @@ class MainWindow(QMainWindow):
             self.parent.update_controls()
 
     def take_sequence(self):
-        distance = 10
+        distance = 4
         positions = np.array([[0,0], [1,0], [1,1], [0,1]])*distance
         anchor = np.array(self.mmc.getXYPosition(self.xy_stage))
         for i, position in enumerate(positions):
             pos = position + anchor
             self.mmc.setXYPosition(pos[0], pos[1])
             self.mmc.waitForDevice(self.xy_stage)
-            time.sleep(0.1)
+            time.sleep(0.2)
             # shoot photo and wait for it to be shot
             self.camera.new_frame.connect(self.store_sequence_image, Qt.ConnectionType.SingleShotConnection)
             self.got_image_mutex.lock()
@@ -479,15 +480,18 @@ class MainWindow(QMainWindow):
     # Make a laser sweep
 
     def laser_sweep(self):
-        if not self.aquiring:
+        bandwidth = self.laser.bandwith
+        band_radius = self.laser.bandwith/2
+        dialog = SweepDialog(self, title="Laser Sweep Data", limits=(475+band_radius, 850-bandwidth, 475+bandwidth, 850-band_radius), defaults=(600, 700, 10), unit="nm")
+        if dialog.exec() and not self.aquiring:
+            self.wavelens = np.linspace(*dialog.get_values())
             self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_laser_sweep)
-            self.aquisition_worker.start()
             self.aquisition_worker.done.connect(self.save_laser_data)
-        self.update_controls()
+            self.aquisition_worker.start()
+            
 
     def take_laser_sweep(self):
-        N = 20
-        self.wavelens = np.linspace(450, 550, N)
+        N = len(self.wavelens)
         self.laser.set_wavelen(self.wavelens[0])
         time.sleep(5)
         self.laser_data_raw = []
@@ -513,7 +517,7 @@ class MainWindow(QMainWindow):
         self.got_image.wakeAll()
     
     def save_laser_data(self):
-        dialog = QFileDialog(self, 'Save Sweep')
+        dialog = QFileDialog(self, 'Save Wavelength Sweep')
         dialog.setNameFilter('TIFF image sequence (*.tif)')
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
@@ -525,66 +529,95 @@ class MainWindow(QMainWindow):
             images = np.array(self.laser_data_raw)
 
             if np.shape(images)[1] == 4:
+                np.save(filepath + '_raw.npy', images)
                 diff = np.array([pc.background_subtracted(photos[0], pc.common_background(photos)) for photos in images])
                 images = pc.float_to_mono(diff)
 
             tiff.imwrite(filepath + '.tif', images)
 
             metadata = self.generate_metadata()
-            metadata['Laser.wavelength'] = {
+            metadata['Laser.wavelength [nm]'] = {
                 "Start": int(self.wavelens[0]),
                 "Stop": int(self.wavelens[-1]),
                 "Number": len(self.wavelens)}
             with open(filepath+'.yaml', 'w') as file:
                 yaml.dump(metadata, file)
         self.data_directory = dialog.directory()
+        self.aquisition_label.setText('')
+        self.statusBar().showMessage('Done!')
 
     # Make a Z sweep
 
     def z_sweep(self):
-        if not self.aquiring:
+        dialog = SweepDialog(self, title="Z Sweep Data", limits=(-10, 10, -10, 10), defaults=(0, 1, 10), unit="micron")
+        if dialog.exec() and not self.aquiring:
+            self.z_positions = np.linspace(*dialog.get_values())
             self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_z_sweep)
+            self.aquisition_worker.done.connect(self.save_z_data)
             self.aquisition_worker.start()
-        self.update_controls()
     
     def take_z_sweep(self):
         z_zero = self.mmc.getZPosition()
-        N = 100
-        z_positions = np.linspace(-5, 5, N)
+        N = len(self.z_positions)
         
-        z_data_raw = np.zeros((N, 4, self.roi_height, self.roi_width, 1), dtype=np.uint16)
-        for i, z in enumerate(z_positions):
+        self.z_data_raw = []
+        for i, z in enumerate(self.z_positions):
             self.aquisition_label.setText(f'Aquiring Data: z sweep progression {i+1}/{N}')
-            self.photos = np.zeros((4, self.roi_height, self.roi_width, 1))
+
+            # Set position
             pos = z_zero + z
             self.z_position = i
             self.mmc.setZPosition(pos)
             self.mmc.waitForDevice(self.z_stage)
             time.sleep(0.1)
-            self.take_sequence()
-            z_data_raw[i] = self.photos
+            # Take picture
+            if self.grid:
+                self.photos = []
+                self.take_sequence()
+                self.z_data_raw.append(self.photos)
+                self.background = pc.common_background(self.photos)
+            else:
+                self.camera.new_frame.connect(self.store_z_data, Qt.ConnectionType.SingleShotConnection)
+                self.got_image_mutex.lock()
+                self.got_image.wait(self.got_image_mutex)
+                self.got_image_mutex.unlock()
+
         self.mmc.setZPosition(z_zero)
         self.aquisition_label.setText('Calculating Images')
-        self.save_z_sweep(z_data_raw)
-    
-    def save_z_sweep(self, z_data_raw):
-        z_data = np.zeros((len(z_data_raw), self.roi_height, self.roi_width, 1), dtype=np.float64)
-        name = os.path.join(self.data_directory, 'z_sweep_0')
-        n = 1
-        while os.path.isdir(name):
-            name = os.path.join(self.data_directory, f'z_sweep_{n}')
         
-        os.mkdir(name)
+    def store_z_data(self, image: np.ndarray):
+        self.z_data_raw.append(image)
+        self.got_image.wakeAll()
+    
 
-        for i in range(len(z_data_raw)):
-            photos = z_data_raw[i]
-            background = pc.common_background(photos)
-            data = photos[0]
-            diff = pc.background_subtracted(data, background)
-            z_data[i] = diff
-            tiff.imwrite(os.path.join(name, f'z_sweep_{i}.tif'), pc.float_to_mono(diff))
-        np.save(os.path.join(name, 'data.npy'), z_data)
-        np.save(os.path.join(name, 'data_raw.npy'), z_data_raw)
+    def save_z_data(self):
+        dialog = QFileDialog(self, 'Save Z Sweep')
+        dialog.setNameFilter('TIFF image sequence (*.tif)')
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setDirectory(self.data_directory)
+        if dialog.exec():
+            filepath = dialog.selectedFiles()[0]
+            filepath = os.path.splitext(filepath)[0]
+            
+            images = np.array(self.z_data_raw)
+
+            if np.shape(images)[1] == 4:
+                np.save(filepath + '_raw.npy', images)
+                diff = np.array([pc.background_subtracted(photos[0], pc.common_background(photos)) for photos in images])
+                images = pc.float_to_mono(diff)
+
+            tiff.imwrite(filepath + '.tif', images)
+
+            metadata = self.generate_metadata()
+            metadata['Setup.z_focus [um]'] = {
+                "Start": int(self.z_positions[0]),
+                "Stop": int(self.z_positions[-1]),
+                "Number": len(self.z_positions)}
+            
+            with open(filepath +'.yaml', 'w') as file:
+                yaml.dump(metadata, file)
+        self.data_directory = dialog.directory()
         self.aquisition_label.setText('')
         self.statusBar().showMessage('Done!')
 
@@ -603,6 +636,8 @@ class MainWindow(QMainWindow):
         self.camera.startStopStream()
         self.roi_width = roi.width()
         self.roi_height = roi.height()
+        self.subtract_background = False
+        self.background = None
 
         # Go out of roi mode in UI
         self.update_controls()
@@ -640,8 +675,8 @@ class MainWindow(QMainWindow):
             exposure_time = int(self.camera.device_property_map.get_value_float(ic4.PropId.EXPOSURE_TIME))
         return({
             "Camera.fps": self.camera.device_property_map.get_value_float(ic4.PropId.ACQUISITION_FRAME_RATE),
-            "Camera.exposure_time": exposure_time,
-            "Laser.wavelength": self.laser.wavelen,
-            "Laser.bandwith": self.laser.bandwith,
-            "Laser.frequency": self.laser.get_frequency()
+            "Camera.exposure_time [us]": exposure_time,
+            "Laser.wavelength [nm]": self.laser.wavelen,
+            "Laser.bandwith [nm]": self.laser.bandwith,
+            "Laser.frequency [kHz]": self.laser.get_frequency()
         })
