@@ -44,8 +44,8 @@ class MainWindow(QMainWindow):
         mm_dir = 'C:/Program Files/Micro-Manager-2.0'
         self.setup_micromanager(mm_dir)
 
-        #self.laser = Laser(self)
-        #self.laser.changedState.connect(self.update_controls)
+        self.laser = Laser(self)
+        self.laser.changedState.connect(self.update_controls)
         
         self.grid = False
         self.got_image_mutex = QMutex()

@@ -1,4 +1,6 @@
-import NKTP_DLL as nkt
+import os
+if os.name == 'nt':
+    import NKTP_DLL as nkt
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QMessageBox
@@ -7,11 +9,14 @@ class Laser(QObject):
     changedState = Signal(bool)
     def __init__(self, parent):
         super().__init__(parent=parent)
-        self.grab(warning=False)
+        self.open = False
+        if os.name == 'nt':
+            self.grab(warning=False)
+        else:
+            QMessageBox.warning(self.parent(), 'Error', 'Failed opening laser: Linux/Mac are not supported due to the NKT laser only providing .dll')
         
     
     def set_emission(self, emit: bool):
-
         # Turn on
         nkt.registerWriteU8('COM4', 1, 0x30, emit, -1)
 
@@ -30,7 +35,7 @@ class Laser(QObject):
         else:
             self.open = False
             if warning:
-                QMessageBox.warning(self.parent(),"Error", "Failed opening laser: port busy.")
+                QMessageBox.warning(self.parent(),'Error', 'Failed opening laser: port busy.')
         self.changedState.emit(self.open)
     
     def release(self):
@@ -62,4 +67,5 @@ class Laser(QObject):
         return nkt.registerReadU32('COM4', 1, 0x71, -1)[1]/1000
 
     def __del__(self):
-        nkt.closePorts('COM4')
+        if self.open:
+            nkt.closePorts('COM4')
