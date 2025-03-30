@@ -699,6 +699,7 @@ class MainWindow(QMainWindow):
             'Camera.exposure_time [us]': exposure_time,
             'Camera.pixel_width [um]': self.camera.device_property_map.get_value_float(ic4.PropId.SENSOR_PIXEL_WIDTH),
             'Camera.pixel_height [um]': self.camera.device_property_map.get_value_float(ic4.PropId.SENSOR_PIXEL_HEIGHT),
+            'Camera.magnification': self.magnification,
             'Laser.wavelength [nm]': self.laser.wavelen,
             'Laser.bandwith [nm]': self.laser.bandwith,
             'Laser.frequency [kHz]': self.laser.get_frequency()
