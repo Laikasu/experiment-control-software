@@ -20,9 +20,6 @@ class SweepDialog(QDialog):
         layout.addRow("End", self.end)
         layout.addRow("Number", self.number)
 
-        # Buttons
-        self.cancel_button = QPushButton("Cancel")
-        self.submit_button = QPushButton("Start")
 
         self.button_box = QDialogButtonBox( QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
         self.button_box.accepted.connect(self.accept)

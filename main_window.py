@@ -1,4 +1,4 @@
-from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, Signal, QThread, QWaitCondition, QMutex, QTemporaryFile
+from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, Signal, QThread, QWaitCondition, QMutex, QSettings
 from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar, QPushButton, QInputDialog
 
@@ -44,8 +44,8 @@ class MainWindow(QMainWindow):
         mm_dir = 'C:/Program Files/Micro-Manager-2.0'
         self.setup_micromanager(mm_dir)
 
-        self.laser = Laser(self)
-        self.laser.changedState.connect(self.update_controls)
+        #self.laser = Laser(self)
+        #self.laser.changedState.connect(self.update_controls)
         
         self.grid = False
         self.got_image_mutex = QMutex()
@@ -55,6 +55,15 @@ class MainWindow(QMainWindow):
         self.aquiring_mutex = QMutex()
 
         self.temp_video_file = None
+
+        # Load settings
+        self.settings = QSettings('Casper', 'Monitor')
+        if self.settings.contains('magnification'):
+            self.magnification = self.settings.value('magnification')
+        else:
+            self.magnification = 80 # Default
+            self.set_setup_parameters()
+
         
 
         # Make sure the %appdata%/demoapp directory exists
@@ -171,8 +180,8 @@ class MainWindow(QMainWindow):
         self.z_sweep_act.setStatusTip('Perform a focus sweep')
         self.z_sweep_act.triggered.connect(self.z_sweep)
 
-        self.video_act = QAction(QIcon(application_path + "images/recordstart.png"), "&Capture Video", self)
-        self.video_act.setToolTip("Capture Video")
+        self.video_act = QAction(QIcon(application_path + 'images/recordstart.png'), '&Capture Video', self)
+        self.video_act.setToolTip('Capture Video')
         self.video_act.setCheckable(True)
         self.video_act.toggled.connect(self.toggle_video)
 
@@ -246,7 +255,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.snap_processed_photo_act)
         toolbar.addAction(self.laser_sweep_act)
         toolbar.addAction(self.z_sweep_act)
-        # button = QPushButton("metadata", toolbar)
+        # button = QPushButton('metadata', toolbar)
         # button.clicked.connect(self.generate_metadata)
         # toolbar.addWidget(button)
 
@@ -267,6 +276,18 @@ class MainWindow(QMainWindow):
         self.camera.label_update.connect(self.camera_label.setText)
         
 
+    def set_setup_parameters(self):
+        dialog = QInputDialog(self)
+        dialog.setObjectName('Setup Parameters')
+        dialog.setIntMinimum(1)
+        dialog.setIntMaximum(200)
+        dialog.setIntStep(10)
+        dialog.setIntValue(80)
+        dialog.setLabelText('Magnification')
+        dialog.setInputMode(QInputDialog.InputMode.IntInput)
+        if dialog.exec():
+            self.magnification = dialog.intValue()
+            self.settings.setValue('magnification', self.magnification)
         
 
     def update_controls(self):
@@ -482,7 +503,7 @@ class MainWindow(QMainWindow):
     def laser_sweep(self):
         bandwidth = self.laser.bandwith
         band_radius = self.laser.bandwith/2
-        dialog = SweepDialog(self, title="Laser Sweep Data", limits=(475+band_radius, 850-bandwidth, 475+bandwidth, 850-band_radius), defaults=(600, 700, 10), unit="nm")
+        dialog = SweepDialog(self, title='Laser Sweep Data', limits=(475+band_radius, 850-bandwidth, 475+bandwidth, 850-band_radius), defaults=(600, 700, 10), unit='nm')
         if dialog.exec() and not self.aquiring:
             self.wavelens = np.linspace(*dialog.get_values())
             self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_laser_sweep)
@@ -537,9 +558,9 @@ class MainWindow(QMainWindow):
 
             metadata = self.generate_metadata()
             metadata['Laser.wavelength [nm]'] = {
-                "Start": int(self.wavelens[0]),
-                "Stop": int(self.wavelens[-1]),
-                "Number": len(self.wavelens)}
+                'Start': int(self.wavelens[0]),
+                'Stop': int(self.wavelens[-1]),
+                'Number': len(self.wavelens)}
             with open(filepath+'.yaml', 'w') as file:
                 yaml.dump(metadata, file)
         self.data_directory = dialog.directory()
@@ -549,7 +570,7 @@ class MainWindow(QMainWindow):
     # Make a Z sweep
 
     def z_sweep(self):
-        dialog = SweepDialog(self, title="Z Sweep Data", limits=(-10, 10, -10, 10), defaults=(0, 1, 10), unit="micron")
+        dialog = SweepDialog(self, title='Z Sweep Data', limits=(-10, 10, -10, 10), defaults=(0, 1, 10), unit='micron')
         if dialog.exec() and not self.aquiring:
             self.z_positions = np.linspace(*dialog.get_values())
             self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_z_sweep)
@@ -611,9 +632,9 @@ class MainWindow(QMainWindow):
 
             metadata = self.generate_metadata()
             metadata['Setup.z_focus [um]'] = {
-                "Start": int(self.z_positions[0]),
-                "Stop": int(self.z_positions[-1]),
-                "Number": len(self.z_positions)}
+                'Start': int(self.z_positions[0]),
+                'Stop': int(self.z_positions[-1]),
+                'Number': len(self.z_positions)}
             
             with open(filepath +'.yaml', 'w') as file:
                 yaml.dump(metadata, file)
@@ -670,13 +691,15 @@ class MainWindow(QMainWindow):
     def generate_metadata(self) -> dict:
         exposure_auto = self.camera.device_property_map.get_value_bool(ic4.PropId.EXPOSURE_AUTO)
         if exposure_auto:
-            exposure_time = "auto"
+            exposure_time = 'auto'
         else:
             exposure_time = int(self.camera.device_property_map.get_value_float(ic4.PropId.EXPOSURE_TIME))
         return({
-            "Camera.fps": self.camera.device_property_map.get_value_float(ic4.PropId.ACQUISITION_FRAME_RATE),
-            "Camera.exposure_time [us]": exposure_time,
-            "Laser.wavelength [nm]": self.laser.wavelen,
-            "Laser.bandwith [nm]": self.laser.bandwith,
-            "Laser.frequency [kHz]": self.laser.get_frequency()
+            'Camera.fps': self.camera.device_property_map.get_value_float(ic4.PropId.ACQUISITION_FRAME_RATE),
+            'Camera.exposure_time [us]': exposure_time,
+            'Camera.pixel_width [um]': self.camera.device_property_map.get_value_float(ic4.PropId.SENSOR_PIXEL_WIDTH),
+            'Camera.pixel_height [um]': self.camera.device_property_map.get_value_float(ic4.PropId.SENSOR_PIXEL_HEIGHT),
+            'Laser.wavelength [nm]': self.laser.wavelen,
+            'Laser.bandwith [nm]': self.laser.bandwith,
+            'Laser.frequency [kHz]': self.laser.get_frequency()
         })
