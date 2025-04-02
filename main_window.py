@@ -16,7 +16,7 @@ import imagingcontrol4 as ic4
 # Laser
 from nktlaser import Laser
 
-from widgets import VideoView, SweepDialog
+from widgets import VideoView, SweepDialog, PropertiesDialog
 import processing as pc
 from camera import Camera
 
@@ -58,10 +58,12 @@ class MainWindow(QMainWindow):
 
         # Load settings
         self.settings = QSettings('Casper', 'Monitor')
-        if self.settings.contains('magnification'):
-            self.magnification = self.settings.value('magnification')
+        if self.settings.contains('magnification') and self.settings.contains('pxsize'):
+            self.magnification = self.settings.value('magnification', type=int)
+            self.pxsize = self.settings.value('pxsize', type=float)
         else:
             self.magnification = 80 # Default
+            self.pxsize = 3.45
             self.set_setup_parameters()
 
         
@@ -191,9 +193,12 @@ class MainWindow(QMainWindow):
         self.toggle_grid_act.toggled.connect(lambda value: setattr(self, 'grid', value))
 
 
-        self.grab_release_laser_act = QAction('Open laser')
+        self.grab_release_laser_act = QAction('Open Laser')
         self.grab_release_laser_act.setCheckable(True)
         self.grab_release_laser_act.triggered.connect(self.laser.toggle_laser)
+
+        self.change_setup_act = QAction('Setup Properties')
+        self.change_setup_act.triggered.connect(self.set_setup_parameters)
 
 
 
@@ -218,6 +223,7 @@ class MainWindow(QMainWindow):
         device_menu.addAction(self.start_live_act)
         device_menu.addSeparator()
         device_menu.addAction(self.close_device_act)
+        device_menu.addAction(self.change_setup_act)
 
         capture_menu = self.menuBar().addMenu('&Capture')
         capture_menu.addAction(self.snap_raw_photo_act)
@@ -277,17 +283,11 @@ class MainWindow(QMainWindow):
         
 
     def set_setup_parameters(self):
-        dialog = QInputDialog(self)
-        dialog.setObjectName('Setup Parameters')
-        dialog.setIntMinimum(1)
-        dialog.setIntMaximum(200)
-        dialog.setIntStep(10)
-        dialog.setIntValue(80)
-        dialog.setLabelText('Magnification')
-        dialog.setInputMode(QInputDialog.InputMode.IntInput)
+        dialog = PropertiesDialog(self)
         if dialog.exec():
-            self.magnification = dialog.intValue()
+            self.magnification, self.pxsize = dialog.get_values()
             self.settings.setValue('magnification', self.magnification)
+            self.settings.setValue('pxsize', self.pxsize)
         
 
     def update_controls(self):
@@ -697,9 +697,8 @@ class MainWindow(QMainWindow):
         return({
             'Camera.fps': self.camera.device_property_map.get_value_float(ic4.PropId.ACQUISITION_FRAME_RATE),
             'Camera.exposure_time [us]': exposure_time,
-            'Camera.pixel_width [um]': self.camera.device_property_map.get_value_float(ic4.PropId.SENSOR_PIXEL_WIDTH),
-            'Camera.pixel_height [um]': self.camera.device_property_map.get_value_float(ic4.PropId.SENSOR_PIXEL_HEIGHT),
-            'Camera.magnification': self.magnification,
+            'Camera.pixel_size [um]': self.pxsize,
+            'Setup.magnification': self.magnification,
             'Laser.wavelength [nm]': self.laser.wavelen,
             'Laser.bandwith [nm]': self.laser.bandwith,
             'Laser.frequency [kHz]': self.laser.get_frequency()
