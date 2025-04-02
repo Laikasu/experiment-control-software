@@ -41,6 +41,10 @@ class MainWindow(QMainWindow):
         # Setup stage
         # Setup microscope connection
 
+        self.camera_timer = QTimer()
+        self.camera_timer.timeout.connect(self.take_picture)
+        self.camera_timer.start()
+
         mm_dir = 'C:/Program Files/Micro-Manager-2.0'
         self.setup_micromanager(mm_dir)
 
