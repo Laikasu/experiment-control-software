@@ -66,7 +66,7 @@ class MainWindow(QMainWindow):
             self.pxsize = 3.45
             self.set_setup_parameters()
 
-        ``
+        
 
         # Make sure the %appdata%/demoapp directory exists
         appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
@@ -326,6 +326,7 @@ class MainWindow(QMainWindow):
         self.grab_release_laser_act.setChecked(self.laser.open)
 
     def closeEvent(self, ev: QCloseEvent):
+        self.camera_timer.stop()
         self.camera.closeEvent(ev)
     
     #==============================================#

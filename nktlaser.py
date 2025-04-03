@@ -77,4 +77,5 @@ class Laser(QObject):
 
     def __del__(self):
         if self.open:
-            self.release()
+            self.set_emission(False)
+            nkt.closePorts('COM4')
