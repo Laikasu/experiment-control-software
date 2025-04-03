@@ -41,10 +41,6 @@ class MainWindow(QMainWindow):
         # Setup stage
         # Setup microscope connection
 
-        self.camera_timer = QTimer()
-        self.camera_timer.timeout.connect(self.take_picture)
-        self.camera_timer.start()
-
         mm_dir = 'C:/Program Files/Micro-Manager-2.0'
         self.setup_micromanager(mm_dir)
 
@@ -96,6 +92,11 @@ class MainWindow(QMainWindow):
         self.camera.state_changed.connect(self.update_controls)
         self.camera.opened.connect(self.video_view.set_size)
         self.camera.opened.connect(self.init_roi)
+
+        fps = 10
+        self.camera_timer = QTimer(self, interval=1000//fps)
+        self.camera_timer.timeout.connect(self.camera.trigger)
+        self.camera_timer.start()
         
 
         self.background: np.ndarray = None

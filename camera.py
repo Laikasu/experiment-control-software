@@ -131,9 +131,13 @@ class Camera(QObject):
         self.updateCameraLabel()
         self.state_changed.emit()
     
+    def trigger(self):
+        if self.grabber.is_streaming:
+            self.device_property_map.execute_command(ic4.PropId.TRIGGER_SOFTWARE)
+    
     def onDeviceOpened(self):
         self.device_property_map = self.grabber.device_property_map
-
+        self.device_property_map.set_value(ic4.PropId.TRIGGER_MODE, "On")
         self.device_property_map.set_value(ic4.PropId.OFFSET_AUTO_CENTER, 'Off')
         self.device_property_map.set_value(ic4.PropId.GAIN_AUTO, 'Off')
         self.device_property_map.set_value(ic4.PropId.GAIN, 0)
