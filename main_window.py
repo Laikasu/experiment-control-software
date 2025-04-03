@@ -54,6 +54,8 @@ class MainWindow(QMainWindow):
         self.aquiring = False
         self.aquiring_mutex = QMutex()
 
+        self.trigger_mode = False
+
         self.temp_video_file = None
 
         # Load settings
@@ -97,7 +99,6 @@ class MainWindow(QMainWindow):
         self.camera_timer = QTimer(self, interval=1000//fps)
         self.camera_timer.timeout.connect(self.camera.trigger)
         self.camera_timer.timeout.connect(self.laser.trigger)
-        self.camera_timer.start()
         
 
         self.background: np.ndarray = None
@@ -143,6 +144,11 @@ class MainWindow(QMainWindow):
         self.device_driver_properties_act = QAction('&Driver Properties', self)
         self.device_driver_properties_act.setStatusTip('Show device driver property dialog')
         self.device_driver_properties_act.triggered.connect(partial(self.camera.onDeviceDriverProperties, self))
+
+        self.trigger_mode_act = QAction(QIcon(application_path + 'images/triggermode.png'), "&Trigger Mode", self)
+        self.trigger_mode_act.setStatusTip("Enable and disable trigger mode")
+        self.trigger_mode_act.setCheckable(True)
+        self.trigger_mode_act.toggled.connect(self.toggle_trigger_mode)
 
         self.start_live_act = QAction(QIcon(application_path + 'images/livestream.png'), '&Live Stream', self)
         self.start_live_act.setStatusTip('Start and stop the live stream')
@@ -224,6 +230,7 @@ class MainWindow(QMainWindow):
         device_menu.addAction(self.device_select_act)
         device_menu.addAction(self.device_properties_act)
         device_menu.addAction(self.device_driver_properties_act)
+        device_menu.addAction(self.trigger_mode_act)
         device_menu.addAction(self.set_roi_act)
         device_menu.addAction(self.move_act)
         device_menu.addAction(self.start_live_act)
@@ -251,6 +258,7 @@ class MainWindow(QMainWindow):
         self.addToolBar(Qt.TopToolBarArea, toolbar)
         toolbar.addAction(self.device_select_act)
         toolbar.addAction(self.device_properties_act)
+        toolbar.addAction(self.trigger_mode_act)
         toolbar.addAction(self.grab_release_laser_act)
         toolbar.addSeparator()
         toolbar.addAction(self.start_live_act)
@@ -328,6 +336,16 @@ class MainWindow(QMainWindow):
     def closeEvent(self, ev: QCloseEvent):
         self.camera_timer.stop()
         self.camera.closeEvent(ev)
+    
+    def toggle_trigger_mode(self, mode):
+        if not mode:
+            self.camera_timer.stop()
+        self.camera.set_trigger_mode(mode)
+        self.laser.set_trigger_mode(mode)
+        self.trigger_mode = mode
+        if mode:
+            self.camera_timer.start()
+
     
     #==============================================#
     # Functions to take raw images and aquisitions #
