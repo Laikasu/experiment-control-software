@@ -20,13 +20,21 @@ class Laser(QObject):
         # Turn on
         nkt.registerWriteU8('COM4', 1, 0x30, emit, -1)
 
+    def trigger(self):
+        if self.open:
+            pulses = 10
+            pass
+            #Trigger
+            #nkt.registerWriteU16('COM4', 1, 0x34, pulses, -1)
     
     def grab(self, warning=True):
         result = nkt.openPorts('COM4', 1, 1)
         if result == 0:
             self.open = True
-            # Unlock
+            # Unlock interlock
             nkt.registerWriteU16('COM4', 1, 0x32, 1, -1)
+            # Set trigger mode to software triggered burst
+            #nkt.registerWriteU8('COM4', 1, 0x31, 2, -1)
             self.set_emission(True)
             lower = nkt.registerReadU16('COM4', 16, 0x34, -1)[1]/10
             higher = nkt.registerReadU16('COM4', 16, 0x33, -1)[1]/10
