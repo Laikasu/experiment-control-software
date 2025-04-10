@@ -11,6 +11,7 @@ class Laser(QObject):
         super().__init__(parent=parent)
         self.open = False
         self.trigger_mode = 0 # Internal
+        self.pulses = 10
         if os.name == 'nt':
             self.grab(warning=False)
         else:
@@ -23,9 +24,8 @@ class Laser(QObject):
 
     def trigger(self):
         if self.open:
-            pulses = 1
             #Trigger
-            nkt.registerWriteU16('COM4', 1, 0x34, pulses, -1)
+            nkt.registerWriteU16('COM4', 1, 0x34, self.pulses, -1)
     
     def set_trigger_mode(self, mode):
         # Trigger if True else Internal
