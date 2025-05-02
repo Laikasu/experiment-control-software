@@ -54,6 +54,8 @@ class MainWindow(QMainWindow):
         self.aquiring = False
         self.aquiring_mutex = QMutex()
 
+        self.trigger_mode = False
+
         self.temp_video_file = None
 
         # Load settings
@@ -92,6 +94,10 @@ class MainWindow(QMainWindow):
         self.camera.state_changed.connect(self.update_controls)
         self.camera.opened.connect(self.video_view.set_size)
         self.camera.opened.connect(self.init_roi)
+
+        fps = 10
+        self.camera_timer = QTimer(self, interval=1000//fps)
+        self.camera_timer.timeout.connect(self.trigger)
         
 
         self.background: np.ndarray = None
@@ -137,6 +143,15 @@ class MainWindow(QMainWindow):
         self.device_driver_properties_act = QAction('&Driver Properties', self)
         self.device_driver_properties_act.setStatusTip('Show device driver property dialog')
         self.device_driver_properties_act.triggered.connect(partial(self.camera.onDeviceDriverProperties, self))
+
+        self.trigger_mode_act = QAction(QIcon(application_path + 'images/triggermode.png'), "&Trigger Mode", self)
+        self.trigger_mode_act.setStatusTip("Enable and disable trigger mode")
+        self.trigger_mode_act.setCheckable(True)
+        self.trigger_mode_act.toggled.connect(self.toggle_trigger_mode)
+
+        self.pulses_act = QAction("&Pulse count", self)
+        self.pulses_act.setStatusTip("Set the amount of pulses in each trigger")
+        self.pulses_act.triggered.connect(self.set_pulses)
 
         self.start_live_act = QAction(QIcon(application_path + 'images/livestream.png'), '&Live Stream', self)
         self.start_live_act.setStatusTip('Start and stop the live stream')
@@ -218,6 +233,8 @@ class MainWindow(QMainWindow):
         device_menu.addAction(self.device_select_act)
         device_menu.addAction(self.device_properties_act)
         device_menu.addAction(self.device_driver_properties_act)
+        device_menu.addAction(self.trigger_mode_act)
+        device_menu.addAction(self.pulses_act)
         device_menu.addAction(self.set_roi_act)
         device_menu.addAction(self.move_act)
         device_menu.addAction(self.start_live_act)
@@ -245,6 +262,7 @@ class MainWindow(QMainWindow):
         self.addToolBar(Qt.TopToolBarArea, toolbar)
         toolbar.addAction(self.device_select_act)
         toolbar.addAction(self.device_properties_act)
+        toolbar.addAction(self.trigger_mode_act)
         toolbar.addAction(self.grab_release_laser_act)
         toolbar.addSeparator()
         toolbar.addAction(self.start_live_act)
@@ -320,7 +338,32 @@ class MainWindow(QMainWindow):
         self.grab_release_laser_act.setChecked(self.laser.open)
 
     def closeEvent(self, ev: QCloseEvent):
+        self.camera_timer.stop()
         self.camera.closeEvent(ev)
+    
+    def toggle_trigger_mode(self, mode):
+        if not mode:
+            self.camera_timer.stop()
+        self.camera.set_trigger_mode(mode)
+        self.laser.set_trigger_mode(mode)
+        self.trigger_mode = mode
+        if mode:
+            self.camera_timer.start()
+    
+    def trigger(self):
+        self.camera.trigger()
+        self.laser.trigger()
+        
+    def set_pulses(self):
+        dialog = QInputDialog(self)
+        dialog.setInputMode(QInputDialog.InputMode.IntInput)
+        dialog.setLabelText("Enter the pulse count")
+        dialog.setIntRange(1, 1000)
+        dialog.setIntValue(self.laser.pulses)  # default value
+        dialog.setWindowTitle("Pulse Count")
+        if dialog.exec():
+            self.laser.pulses = dialog.intValue()
+
     
     #==============================================#
     # Functions to take raw images and aquisitions #
@@ -356,6 +399,8 @@ class MainWindow(QMainWindow):
             self.photos = []
             self.func = func
             self.parent = parent
+            if parent.trigger_mode:
+                parent.camera_timer.stop()
             parent.aquiring_mutex.lock()
             parent.aquiring = True
             parent.aquiring_mutex.unlock()
@@ -364,13 +409,14 @@ class MainWindow(QMainWindow):
         def run(self):
             self.func(*self.args)
             self.done.emit()
-            self.finish_aquisition()
-        
-        def finish_aquisition(self):
-            self.parent.aquiring_mutex.lock()
-            self.parent.aquiring = False
-            self.parent.aquiring_mutex.unlock()
-            self.parent.update_controls()
+
+    def finish_aquisition(self):
+        self.aquiring_mutex.lock()
+        self.aquiring = False
+        self.aquiring_mutex.unlock()
+        self.update_controls()
+        if self.trigger_mode:
+            self.camera_timer.start()
 
     def take_sequence(self):
         distance = 4
@@ -383,6 +429,8 @@ class MainWindow(QMainWindow):
             time.sleep(0.2)
             # shoot photo and wait for it to be shot
             self.camera.new_frame.connect(self.store_sequence_image, Qt.ConnectionType.SingleShotConnection)
+            if self.trigger_mode:
+                self.trigger()
             self.got_image_mutex.lock()
             self.got_image.wait(self.got_image_mutex)
             self.got_image_mutex.unlock()
@@ -453,9 +501,11 @@ class MainWindow(QMainWindow):
             if not self.aquiring:
                 self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_sequence)
                 self.aquisition_worker.done.connect(self.set_background)
+                self.aquisition_worker.done.connect(self.finish_aquisition)
                 self.aquisition_worker.start()
         else:
             self.camera.new_frame.connect(self.set_background, Qt.ConnectionType.SingleShotConnection)
+            self.trigger()
     
     def set_background(self, image: np.ndarray=None):
         if image is not None:
@@ -472,6 +522,7 @@ class MainWindow(QMainWindow):
             if not self.aquiring:
                 self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_sequence)
                 self.aquisition_worker.done.connect(self.save_processed_photo)
+                self.aquisition_worker.done.connect(self.finish_aquisition)
                 self.aquisition_worker.start()
         else:
             # Snap single picture
@@ -503,11 +554,12 @@ class MainWindow(QMainWindow):
     def laser_sweep(self):
         bandwidth = self.laser.bandwith
         band_radius = self.laser.bandwith/2
-        dialog = SweepDialog(self, title='Laser Sweep Data', limits=(475+band_radius, 850-bandwidth, 475+bandwidth, 850-band_radius), defaults=(600, 700, 10), unit='nm')
+        dialog = SweepDialog(self, title='Laser Sweep Data', limits=(390+band_radius, 850-bandwidth, 390+bandwidth, 850-band_radius), defaults=(600, 700, 10), unit='nm')
         if dialog.exec() and not self.aquiring:
             self.wavelens = np.linspace(*dialog.get_values())
             self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_laser_sweep)
             self.aquisition_worker.done.connect(self.save_laser_data)
+            self.aquisition_worker.done.connect(self.finish_aquisition)
             self.aquisition_worker.start()
             
 
@@ -527,6 +579,7 @@ class MainWindow(QMainWindow):
                 self.background = pc.common_background(self.photos)
             else:
                 self.camera.new_frame.connect(self.store_laser_data, Qt.ConnectionType.SingleShotConnection)
+                self.trigger()
                 self.got_image_mutex.lock()
                 self.got_image.wait(self.got_image_mutex)
                 self.got_image_mutex.unlock()
@@ -575,6 +628,7 @@ class MainWindow(QMainWindow):
             self.z_positions = np.linspace(*dialog.get_values())
             self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_z_sweep)
             self.aquisition_worker.done.connect(self.save_z_data)
+            self.aquisition_worker.done.connect(self.finish_aquisition)
             self.aquisition_worker.start()
     
     def take_z_sweep(self):
@@ -590,7 +644,7 @@ class MainWindow(QMainWindow):
             self.z_position = i
             self.mmc.setZPosition(pos)
             self.mmc.waitForDevice(self.z_stage)
-            time.sleep(0.1)
+            time.sleep(0.5)
             # Take picture
             if self.grid:
                 self.photos = []
@@ -599,6 +653,7 @@ class MainWindow(QMainWindow):
                 self.background = pc.common_background(self.photos)
             else:
                 self.camera.new_frame.connect(self.store_z_data, Qt.ConnectionType.SingleShotConnection)
+                self.trigger()
                 self.got_image_mutex.lock()
                 self.got_image.wait(self.got_image_mutex)
                 self.got_image_mutex.unlock()
@@ -694,6 +749,11 @@ class MainWindow(QMainWindow):
             exposure_time = 'auto'
         else:
             exposure_time = int(self.camera.device_property_map.get_value_float(ic4.PropId.EXPOSURE_TIME))
+        
+        if self.trigger_mode:
+            frequency = "triggered"
+        else:
+            frequency = self.laser.get_frequency()
         return({
             'Camera.fps': self.camera.device_property_map.get_value_float(ic4.PropId.ACQUISITION_FRAME_RATE),
             'Camera.exposure_time [us]': exposure_time,
@@ -701,5 +761,5 @@ class MainWindow(QMainWindow):
             'Setup.magnification': self.magnification,
             'Laser.wavelength [nm]': self.laser.wavelen,
             'Laser.bandwith [nm]': self.laser.bandwith,
-            'Laser.frequency [kHz]': self.laser.get_frequency()
+            'Laser.frequency [kHz]': frequency
         })
