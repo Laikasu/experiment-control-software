@@ -2,6 +2,7 @@ from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, 
 from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar, QPushButton, QInputDialog
 
+from multiprocessing import Process, Queue
 import os
 import numpy as np
 import tifffile as tiff
@@ -21,18 +22,13 @@ import processing as pc
 from camera import Camera
 
 from functools import partial
+        
 
-
-
-
-class PersistentWorkerThread(QThread):
-    def __init__(self, func):
-        super().__init__()
-        self.func = func
 
 
 class MainWindow(QMainWindow):
     new_processed_frame = Signal(np.ndarray)
+    move_stage = Signal(np.ndarray)
     def __init__(self):
         application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
         QMainWindow.__init__(self)
@@ -86,8 +82,7 @@ class MainWindow(QMainWindow):
 
         self.video_view = VideoView(self)
         self.video_view.roi_set.connect(self.update_roi)
-        self.move_stage_worker = PersistentWorkerThread(self.move_stage)
-        self.video_view.move_stage.connect(self.move_stage_worker.func)
+        self.video_view.move_stage.connect(self.move_stage.emit)
 
         self.camera = Camera(self)
         self.camera.new_frame.connect(self.update_display)
@@ -717,10 +712,6 @@ class MainWindow(QMainWindow):
 
         # Go out of roi mode in UI
         self.update_controls()
-    
-    def move_stage(self, displacement: np.ndarray):
-        displacement_micron = 3.45*displacement/40
-        self.mmc.setRelativeXYPosition(-displacement_micron[1], -displacement_micron[0])
 
     def toggle_background_subtraction(self):
         self.subtract_background = not self.subtract_background

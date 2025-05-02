@@ -87,7 +87,7 @@ class VideoView(QGraphicsView):
         self.zoom_factor = 1.25
         self.current_scale = 1.0
         self.start_point = None
-        self.displacement_thresh = 10
+        self.displacement_thresh = 2
 
         self._mode = "navigation"
     
