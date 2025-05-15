@@ -351,8 +351,9 @@ class MainWindow(QMainWindow):
             self.camera_timer.start()
     
     def trigger(self):
-        self.camera.trigger()
-        self.laser.trigger()
+        if self.trigger_mode:
+            self.camera.trigger()
+            self.laser.trigger()
         
     def set_pulses(self):
         dialog = QInputDialog(self)
@@ -429,10 +430,12 @@ class MainWindow(QMainWindow):
             time.sleep(0.2)
             # shoot photo and wait for it to be shot
             self.camera.new_frame.connect(self.store_sequence_image, Qt.ConnectionType.SingleShotConnection)
-            if self.trigger_mode:
-                self.trigger()
+            self.trigger()
             self.got_image_mutex.lock()
-            self.got_image.wait(self.got_image_mutex)
+            # Retry
+            while not self.got_image.wait(self.got_image_mutex, 1000):
+                self.camera.new_frame.connect(self.store_sequence_image, Qt.ConnectionType.SingleShotConnection)
+                self.trigger()
             self.got_image_mutex.unlock()
         
         # Return to base
@@ -440,9 +443,8 @@ class MainWindow(QMainWindow):
 
     def store_sequence_image(self, image: np.ndarray):
         self.photos.append(image)
-        self.got_image_mutex.lock()
+        print('stored')
         self.got_image.wakeAll()
-        self.got_image_mutex.unlock()
     
     def toggle_video(self, start: bool):
         if start:
@@ -580,10 +582,13 @@ class MainWindow(QMainWindow):
                 self.laser_data_raw.append(self.photos)
                 self.background = pc.common_background(self.photos)
             else:
+                self.got_image_mutex.lock()
                 self.camera.new_frame.connect(self.store_laser_data, Qt.ConnectionType.SingleShotConnection)
                 self.trigger()
-                self.got_image_mutex.lock()
-                self.got_image.wait(self.got_image_mutex)
+                # Retry
+                while not self.got_image.wait(self.got_image_mutex, 1000):
+                    self.camera.new_frame.connect(self.store_laser_data, Qt.ConnectionType.SingleShotConnection)
+                    self.trigger()
                 self.got_image_mutex.unlock()
         
         self.aquisition_label.setText('Saving Images')
@@ -658,7 +663,10 @@ class MainWindow(QMainWindow):
                 self.camera.new_frame.connect(self.store_z_data, Qt.ConnectionType.SingleShotConnection)
                 self.trigger()
                 self.got_image_mutex.lock()
-                self.got_image.wait(self.got_image_mutex)
+                # Retry
+                while not self.got_image.wait(self.got_image_mutex, 1000):
+                    self.camera.new_frame.connect(self.store_z_data, Qt.ConnectionType.SingleShotConnection)
+                    self.trigger()
                 self.got_image_mutex.unlock()
 
         self.mmc.setZPosition(z_zero)
