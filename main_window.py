@@ -330,7 +330,7 @@ class MainWindow(QMainWindow):
         self.snap_raw_photo_act.setEnabled(grabber.is_streaming and not self.aquiring)
         self.z_sweep_act.setEnabled(grabber.is_streaming and not self.aquiring and z_stage_connected and xy_okay and self.laser.open)
         self.set_roi_act.setEnabled(grabber.is_device_valid and not self.video_view.background.rect().isEmpty() and not self.aquiring)
-        self.move_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_okay)
+        self.move_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_stage_connected)
         self.move_act.setChecked(self.video_view.mode == 'move')
         self.set_roi_act.setChecked(self.video_view.mode == 'roi')
         self.subtract_background_act.setEnabled(self.background is not None)
@@ -440,7 +440,9 @@ class MainWindow(QMainWindow):
 
     def store_sequence_image(self, image: np.ndarray):
         self.photos.append(image)
+        self.got_image_mutex.lock()
         self.got_image.wakeAll()
+        self.got_image_mutex.unlock()
     
     def toggle_video(self, start: bool):
         if start:
@@ -584,7 +586,7 @@ class MainWindow(QMainWindow):
                 self.got_image.wait(self.got_image_mutex)
                 self.got_image_mutex.unlock()
         
-        self.aquisition_label.setText('Calculating Images')
+        self.aquisition_label.setText('Saving Images')
     
     def store_laser_data(self, image: np.ndarray):
         self.laser_data_raw.append(image)
@@ -604,8 +606,9 @@ class MainWindow(QMainWindow):
 
             if np.shape(images)[1] == 4:
                 np.save(filepath + '_raw.npy', images)
-                diff = np.array([pc.background_subtracted(photos[0], pc.common_background(photos)) for photos in images])
-                images = pc.float_to_mono(diff)
+                images = images[:,0]
+                #diff = np.array([pc.background_subtracted(photos[0], pc.common_background(photos)) for photos in images])
+                #images = pc.float_to_mono(diff)
 
             tiff.imwrite(filepath + '.tif', images)
 
@@ -659,7 +662,7 @@ class MainWindow(QMainWindow):
                 self.got_image_mutex.unlock()
 
         self.mmc.setZPosition(z_zero)
-        self.aquisition_label.setText('Calculating Images')
+        self.aquisition_label.setText('Saving Images')
         
     def store_z_data(self, image: np.ndarray):
         self.z_data_raw.append(image)
@@ -680,8 +683,9 @@ class MainWindow(QMainWindow):
 
             if np.shape(images)[1] == 4:
                 np.save(filepath + '_raw.npy', images)
-                diff = np.array([pc.background_subtracted(photos[0], pc.common_background(photos)) for photos in images])
-                images = pc.float_to_mono(diff)
+                images = images[:,0]
+                # diff = np.array([pc.background_subtracted(photos[0], pc.common_background(photos)) for photos in images])
+                # images = pc.float_to_mono(diff)
 
             tiff.imwrite(filepath + '.tif', images)
 
