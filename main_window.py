@@ -3,6 +3,7 @@ from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar, QPushButton, QInputDialog
 
 import os
+import logging
 import numpy as np
 import tifffile as tiff
 import cv2
@@ -17,6 +18,7 @@ import imagingcontrol4 as ic4
 from nktlaser import Laser
 # Pump
 from amfTools import AMF, Device
+import amfTools
 
 from widgets import VideoView, SweepDialog, PropertiesDialog
 import processing as pc
@@ -36,18 +38,21 @@ class PersistentWorkerThread(QThread):
 class MainWindow(QMainWindow):
     new_processed_frame = Signal(np.ndarray)
     def __init__(self):
+        logging.basicConfig(level=logging.DEBUG)
         application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
         QMainWindow.__init__(self)
         self.setWindowIcon(QIcon(application_path + '/images/tis.ico'))
 
-        # Setup stage
-        # Setup microscope connection
+        # Setup devices
 
-        mm_dir = 'C:/Program Files/Micro-Manager-2.0'
+        mm_dir = r'C:\Users\20224813\AppData\Local\pymmcore-plus\pymmcore-plus\mm'
         self.setup_micromanager(mm_dir)
 
         self.laser = Laser(self)
         self.laser.changedState.connect(self.update_controls)
+
+        self.pump = self.setup_pump()
+        
         
         self.grid = False
         self.got_image_mutex = QMutex()
@@ -124,6 +129,18 @@ class MainWindow(QMainWindow):
         else:
             self.z_stage = self.mmc.getFocusDevice()
             self.xy_stage = self.mmc.getXYStageDevice()
+            logging.debug('Connected to micromanager')
+    
+    def setup_pump(self):
+        logging.debug('Looking for pump')
+        device_list = amfTools.util.getProductList(connection_mode="USB/RS232", port="COM8")
+        if len(device_list) > 0:
+            logging.debug('Initializing pump')
+            return AMF(product=device_list[0])
+        else:
+            logging.debug('No pump found')
+            QMessageBox.warning(self, 'Error', f'failed to load pump')
+            return None
             
     def createUI(self):
         self.resize(1024, 768)
