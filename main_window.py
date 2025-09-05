@@ -136,7 +136,11 @@ class MainWindow(QMainWindow):
         device_list = amfTools.util.getProductList(connection_mode="USB/RS232", port="COM8")
         if len(device_list) > 0:
             logging.debug('Initializing pump')
-            return AMF(product=device_list[0])
+            amf = AMF(product=device_list[0])
+            if not amf.getHomeStatus():
+                amf.home(False)
+            amf.setSyringeSize(250)
+            return amf
         else:
             logging.debug('No pump found')
             QMessageBox.warning(self, 'Error', f'failed to load pump')
@@ -215,6 +219,10 @@ class MainWindow(QMainWindow):
         self.z_sweep_act = QAction('Focus Sweep')
         self.z_sweep_act.setStatusTip('Perform a focus sweep')
         self.z_sweep_act.triggered.connect(self.z_sweep)
+
+        self.media_act = QAction('Vary Media')
+        self.media_act.setStatusTip('Perform a temporal variation of media')
+        self.media_act.triggered.connect(self.media_sweep)
 
         self.video_act = QAction(QIcon(application_path + 'images/recordstart.png'), '&Capture Video', self)
         self.video_act.setToolTip('Capture Video')
@@ -298,6 +306,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.snap_processed_photo_act)
         toolbar.addAction(self.laser_sweep_act)
         toolbar.addAction(self.z_sweep_act)
+        toolbar.addAction(self.media_act)
         # button = QPushButton('metadata', toolbar)
         # button.clicked.connect(self.generate_metadata)
         # toolbar.addWidget(button)
@@ -359,6 +368,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, ev: QCloseEvent):
         self.camera_timer.stop()
         self.camera.closeEvent(ev)
+        if self.pump:
+            self.pump.disconnect()
     
     def toggle_trigger_mode(self, mode):
         if not mode:
@@ -650,6 +661,18 @@ class MainWindow(QMainWindow):
         self.aquisition_label.setText('')
         self.statusBar().showMessage('Done!')
 
+    
+    # Media sweep
+    def media_sweep(self):
+        self.pump.pullAndWait()
+        water = 10
+        waste = 1
+        self.pump.valveMove(water)
+        self.pump.setFlowRate(1500,2)
+        self.pump.pumpPickupVolume(100)
+        self.pump.valveMove(waste)
+        self.pump.pumpDispenseVolume(100)
+        
     # Make a Z sweep
 
     def z_sweep(self):
