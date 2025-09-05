@@ -443,7 +443,6 @@ class MainWindow(QMainWindow):
 
     def store_sequence_image(self, image: np.ndarray):
         self.photos.append(image)
-        print('stored')
         self.got_image.wakeAll()
     
     def toggle_video(self, start: bool):
@@ -551,6 +550,10 @@ class MainWindow(QMainWindow):
             # also contains raw data
             tiff.imwrite(filepath + '.tif', pc.float_to_mono(diff))
             np.save(os.path.splitext(filepath)[0] + '_raw.npy', self.photos)
+
+            metadata = self.generate_metadata()
+            with open(filepath+'.yaml', 'w') as file:
+                yaml.dump(metadata, file)
         self.data_directory = dialog.directory()
 
     # Make a laser sweep
