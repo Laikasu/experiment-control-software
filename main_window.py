@@ -15,6 +15,8 @@ from pymmcore_plus import CMMCorePlus
 import imagingcontrol4 as ic4
 # Laser
 from nktlaser import Laser
+# Pump
+from amfTools import AMF, Device
 
 from widgets import VideoView, SweepDialog, PropertiesDialog
 import processing as pc
@@ -328,7 +330,7 @@ class MainWindow(QMainWindow):
         self.snap_background_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_okay)
         self.snap_processed_photo_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_okay)
         self.snap_raw_photo_act.setEnabled(grabber.is_streaming and not self.aquiring)
-        self.z_sweep_act.setEnabled(grabber.is_streaming and not self.aquiring and z_stage_connected and xy_okay and self.laser.open)
+        self.z_sweep_act.setEnabled(grabber.is_streaming and not self.aquiring and z_stage_connected and xy_okay)
         self.set_roi_act.setEnabled(grabber.is_device_valid and not self.video_view.background.rect().isEmpty() and not self.aquiring)
         self.move_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_stage_connected)
         self.move_act.setChecked(self.video_view.mode == 'move')
