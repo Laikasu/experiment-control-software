@@ -245,6 +245,9 @@ class MainWindow(QMainWindow):
         self.cancel_aquisition_act = QAction('Cancel aquisition')
         self.cancel_aquisition_act.triggered.connect(self.finish_aquisition)
 
+        self.clean_pump_act = QAction('Clean pump')
+        self.clean_pump_act.triggered.connect(self.clean_pump)
+
 
 
         exit_act = QAction('E&xit', self)
@@ -271,6 +274,7 @@ class MainWindow(QMainWindow):
         device_menu.addSeparator()
         device_menu.addAction(self.close_device_act)
         device_menu.addAction(self.change_setup_act)
+        device_menu.addAction(self.clean_pump_act)
 
         view_menu = self.menuBar().addMenu('&View')
         view_menu.addAction(self.snap_background_act)
@@ -870,6 +874,28 @@ class MainWindow(QMainWindow):
 
         # Go out of roi mode in UI
         self.update_controls()
+    
+    def clean_pump(self):
+        water = 10
+        flowcell = 8
+        waste = 1
+        clean = [2, 3, 4, 5]
+        volume = 200
+
+        outputs = clean
+
+        self.pump.pullAndWait()
+
+        self.pump.setFlowRate(1500,2)
+        for i in range(5):
+            for output in outputs:
+                self.pump.valveMove(water)
+                self.pump.pumpPickupVolume(volume)
+                self.pump.valveMove(output)
+                self.pump.pumpDispenseVolume(volume)
+                self.pump.pumpPickupVolume(volume)
+                self.pump.valveMove(waste)
+                self.pump.pumpDispenseVolume(volume)
     
     def move_stage(self, displacement: np.ndarray):
         displacement_micron = 3.45*displacement/40
