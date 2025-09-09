@@ -1,4 +1,4 @@
-from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, Signal, QThread, QWaitCondition, QMutex, QSettings
+from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, Signal, QThread, QWaitCondition, QMutex, QSettings, QElapsedTimer
 from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar, QPushButton, QInputDialog
 
@@ -242,6 +242,9 @@ class MainWindow(QMainWindow):
         self.change_setup_act = QAction('Setup Properties')
         self.change_setup_act.triggered.connect(self.set_setup_parameters)
 
+        self.cancel_aquisition_act = QAction('Cancel aquisition')
+        self.cancel_aquisition_act.triggered.connect(self.finish_aquisition)
+
 
 
         exit_act = QAction('E&xit', self)
@@ -269,14 +272,18 @@ class MainWindow(QMainWindow):
         device_menu.addAction(self.close_device_act)
         device_menu.addAction(self.change_setup_act)
 
+        view_menu = self.menuBar().addMenu('&View')
+        view_menu.addAction(self.snap_background_act)
+        view_menu.addAction(self.subtract_background_act)
+
         capture_menu = self.menuBar().addMenu('&Capture')
         capture_menu.addAction(self.snap_raw_photo_act)
-        capture_menu.addSeparator()
         capture_menu.addAction(self.snap_processed_photo_act)
+        capture_menu.addSeparator()
         capture_menu.addAction(self.z_sweep_act)
-        capture_menu.addAction(self.snap_background_act)
-        capture_menu.addAction(self.subtract_background_act)
         capture_menu.addAction(self.toggle_grid_act)
+        capture_menu.addAction(self.media_act)
+        capture_menu.addAction(self.cancel_aquisition_act)
         
 
 
@@ -298,12 +305,9 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.set_roi_act)
         toolbar.addAction(self.move_act)
         toolbar.addSeparator()
-        toolbar.addAction(self.subtract_background_act)
-        toolbar.addAction(self.snap_background_act)
-        toolbar.addAction(self.toggle_grid_act)
-        toolbar.addSeparator()
         toolbar.addAction(self.snap_raw_photo_act)
         toolbar.addAction(self.snap_processed_photo_act)
+        toolbar.addSeparator()
         toolbar.addAction(self.laser_sweep_act)
         toolbar.addAction(self.z_sweep_act)
         toolbar.addAction(self.media_act)
@@ -356,14 +360,16 @@ class MainWindow(QMainWindow):
         self.snap_background_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_okay)
         self.snap_processed_photo_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_okay)
         self.snap_raw_photo_act.setEnabled(grabber.is_streaming and not self.aquiring)
-        self.z_sweep_act.setEnabled(grabber.is_streaming and not self.aquiring and z_stage_connected and xy_okay)
+        self.z_sweep_act.setEnabled(grabber.is_streaming and not self.aquiring and z_stage_connected and xy_okay and self.laser.open)
         self.set_roi_act.setEnabled(grabber.is_device_valid and not self.video_view.background.rect().isEmpty() and not self.aquiring)
         self.move_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_stage_connected)
         self.move_act.setChecked(self.video_view.mode == 'move')
         self.set_roi_act.setChecked(self.video_view.mode == 'roi')
         self.subtract_background_act.setEnabled(self.background is not None)
         self.laser_sweep_act.setEnabled(self.laser.open and not self.aquiring and grabber.is_streaming)
+        self.media_act.setEnabled(self.pump is not None and not self.aquiring and grabber.is_streaming)
         self.grab_release_laser_act.setChecked(self.laser.open)
+        self.cancel_aquisition_act.setEnabled(self.aquiring and self.laser.open)
 
     def closeEvent(self, ev: QCloseEvent):
         self.camera_timer.stop()
@@ -435,17 +441,20 @@ class MainWindow(QMainWindow):
             parent.aquiring_mutex.lock()
             parent.aquiring = True
             parent.aquiring_mutex.unlock()
+            parent.cancel_aquisition_act.triggered.connect(self.terminate)
             parent.update_controls()
 
         def run(self):
             self.func(*self.args)
             self.done.emit()
+            
 
     def finish_aquisition(self):
         self.aquiring_mutex.lock()
         self.aquiring = False
         self.aquiring_mutex.unlock()
         self.update_controls()
+        self.aquisition_label.setText('')
         if self.trigger_mode:
             self.camera_timer.start()
 
@@ -453,6 +462,8 @@ class MainWindow(QMainWindow):
         distance = 4
         positions = np.array([[0,0], [1,0], [1,1], [0,1]])*distance
         anchor = np.array(self.mmc.getXYPosition(self.xy_stage))
+        self.mmc.setXYPosition(anchor[0], anchor[1])
+
         for i, position in enumerate(positions):
             pos = position + anchor
             self.mmc.setXYPosition(pos[0], pos[1])
@@ -664,14 +675,99 @@ class MainWindow(QMainWindow):
     
     # Media sweep
     def media_sweep(self):
-        self.pump.pullAndWait()
+        self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_media_sweep)
+        self.aquisition_worker.done.connect(self.save_media_data)
+        self.aquisition_worker.done.connect(self.finish_aquisition)
+        self.aquisition_worker.start()
+        
+        
+    
+    def take_media_sweep(self):
         water = 10
+        flowcell = 8
         waste = 1
-        self.pump.valveMove(water)
-        self.pump.setFlowRate(1500,2)
-        self.pump.pumpPickupVolume(100)
-        self.pump.valveMove(waste)
-        self.pump.pumpDispenseVolume(100)
+        media = [water, 2, 3, 4, 5]
+        volume = 50
+
+        input = media
+        output = flowcell
+
+        
+        # Take a picture once a second, storing it in media_data_raw
+        self.media_data_raw = []
+
+        self.pump.pullAndWait()
+        for medium in input:
+            self.pump.valveMove(medium)
+            self.aquisition_label.setText(f'Aquiring Data: Taking up medium {medium}')
+            self.pump.setFlowRate(1500,2)
+            self.pump.pumpPickupVolume(volume)
+            self.pump.setFlowRate(100,2)
+            self.pump.valveMove(output)
+
+            # Protect sample
+            assert self.pump.getFlowRate() < 101
+
+            self.aquisition_label.setText(f'Aquiring Data: Dispensing medium {medium}')
+
+            # Dispense and only capture during dispensing
+            self.pump.pumpDispenseVolume(volume,block=False)
+            
+            # While pumping, aquire
+            timer = QElapsedTimer()
+            timer.start()
+            while self.pump.getPumpStatus():
+                if timer.hasExpired(2000):
+                    self.take_media_shot()
+                    timer.restart()
+
+        self.aquisition_label.setText('Saving Images')
+                
+    
+    def take_media_shot(self):
+        if self.grid:
+            self.photos = []
+            self.take_sequence()
+            self.media_data_raw.append(self.photos)
+        else:
+            self.camera.new_frame.connect(self.store_media_data, Qt.ConnectionType.SingleShotConnection)
+            self.trigger()
+            self.got_image_mutex.lock()
+            # Retry
+            while not self.got_image.wait(self.got_image_mutex, 1000):
+                self.camera.new_frame.connect(self.store_media_data, Qt.ConnectionType.SingleShotConnection)
+                self.trigger()
+            self.got_image_mutex.unlock()
+
+    def store_media_data(self, image: np.ndarray):
+        self.media_data_raw.append(image)
+        self.got_image.wakeAll()
+    
+    def save_media_data(self):
+        dialog = QFileDialog(self, 'Save Media Data')
+        dialog.setNameFilter('TIFF image sequence (*.tif)')
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setDirectory(self.data_directory)
+        if dialog.exec():
+            filepath = dialog.selectedFiles()[0]
+            filepath = os.path.splitext(filepath)[0]
+            
+            images = np.array(self.media_data_raw)
+
+            if np.shape(images)[1] == 4:
+                np.save(filepath + '_raw.npy', images)
+                images = images[:,0]
+            
+            tiff.imwrite(filepath + '.tif', images)
+
+            metadata = self.generate_metadata()
+            
+            with open(filepath +'.yaml', 'w') as file:
+                yaml.dump(metadata, file)
+        self.data_directory = dialog.directory()
+        self.aquisition_label.setText('')
+        self.statusBar().showMessage('Done!')
         
     # Make a Z sweep
 
