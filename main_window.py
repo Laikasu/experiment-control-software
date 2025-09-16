@@ -17,8 +17,7 @@ import imagingcontrol4 as ic4
 # Laser
 from nktlaser import Laser
 # Pump
-from amfTools import AMF, Device
-import amfTools
+from lspone import Pump
 
 from widgets import VideoView, SweepDialog, PropertiesDialog
 import processing as pc
@@ -51,7 +50,10 @@ class MainWindow(QMainWindow):
         self.laser = Laser(self)
         self.laser.changedState.connect(self.update_controls)
 
-        self.pump = self.setup_pump()
+        # Attempt to setup pump
+        self.pump = Pump(self)
+        self.amf = self.pump.amf
+        self.pump.changedState.connect(self.update_controls)
         
         
         self.grid = False
@@ -131,20 +133,7 @@ class MainWindow(QMainWindow):
             self.xy_stage = self.mmc.getXYStageDevice()
             logging.debug('Connected to micromanager')
     
-    def setup_pump(self):
-        logging.debug('Looking for pump')
-        device_list = amfTools.util.getProductList(connection_mode="USB/RS232", port="COM8")
-        if len(device_list) > 0:
-            logging.debug('Initializing pump')
-            amf = AMF(product=device_list[0])
-            if not amf.getHomeStatus():
-                amf.home(False)
-            amf.setSyringeSize(250)
-            return amf
-        else:
-            logging.debug('No pump found')
-            QMessageBox.warning(self, 'Error', f'failed to load pump')
-            return None
+    
             
     def createUI(self):
         self.resize(1024, 768)
@@ -239,6 +228,10 @@ class MainWindow(QMainWindow):
         self.grab_release_laser_act.setCheckable(True)
         self.grab_release_laser_act.triggered.connect(self.laser.toggle_laser)
 
+        self.grab_release_pump_act = QAction('Open Pump')
+        self.grab_release_pump_act.setCheckable(True)
+        self.grab_release_pump_act.triggered.connect(self.pump.toggle)
+
         self.change_setup_act = QAction('Setup Properties')
         self.change_setup_act.triggered.connect(self.set_setup_parameters)
 
@@ -272,6 +265,8 @@ class MainWindow(QMainWindow):
         device_menu.addAction(self.move_act)
         device_menu.addAction(self.start_live_act)
         device_menu.addSeparator()
+        device_menu.addAction(self.grab_release_laser_act)
+        device_menu.addAction(self.grab_release_pump_act)
         device_menu.addAction(self.close_device_act)
         device_menu.addAction(self.change_setup_act)
         device_menu.addAction(self.clean_pump_act)
@@ -301,7 +296,6 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.device_select_act)
         toolbar.addAction(self.device_properties_act)
         toolbar.addAction(self.trigger_mode_act)
-        toolbar.addAction(self.grab_release_laser_act)
         toolbar.addSeparator()
         toolbar.addAction(self.start_live_act)
         toolbar.addAction(self.video_act)
@@ -371,15 +365,16 @@ class MainWindow(QMainWindow):
         self.set_roi_act.setChecked(self.video_view.mode == 'roi')
         self.subtract_background_act.setEnabled(self.background is not None)
         self.laser_sweep_act.setEnabled(self.laser.open and not self.aquiring and grabber.is_streaming)
-        self.media_act.setEnabled(self.pump is not None and not self.aquiring and grabber.is_streaming)
+        self.media_act.setEnabled(self.pump.open and not self.aquiring and grabber.is_streaming)
         self.grab_release_laser_act.setChecked(self.laser.open)
+        self.grab_release_pump_act.setChecked(self.pump.open)
         self.cancel_aquisition_act.setEnabled(self.aquiring and self.laser.open)
 
     def closeEvent(self, ev: QCloseEvent):
         self.camera_timer.stop()
         self.camera.closeEvent(ev)
-        if self.pump:
-            self.pump.disconnect()
+        if self.amf:
+            self.amf.disconnect()
     
     def toggle_trigger_mode(self, mode):
         if not mode:
@@ -688,10 +683,10 @@ class MainWindow(QMainWindow):
     
     def take_media_sweep(self):
         water = 10
-        flowcell = 8
+        flowcell = 7
         waste = 1
-        media = [water, 2, 3, 4, 5]
-        volume = 50
+        media = [water, 2, water, 3, water, 4, water, 5]
+        volume = 200
 
         input = media
         output = flowcell
@@ -700,27 +695,27 @@ class MainWindow(QMainWindow):
         # Take a picture once a second, storing it in media_data_raw
         self.media_data_raw = []
 
-        self.pump.pullAndWait()
+        self.amf.pullAndWait()
         for medium in input:
-            self.pump.valveMove(medium)
+            self.amf.valveMove(medium)
             self.aquisition_label.setText(f'Aquiring Data: Taking up medium {medium}')
-            self.pump.setFlowRate(1500,2)
-            self.pump.pumpPickupVolume(volume)
-            self.pump.setFlowRate(100,2)
-            self.pump.valveMove(output)
+            self.amf.setFlowRate(1500,2)
+            self.amf.pumpPickupVolume(volume)
+            self.amf.setFlowRate(400,2)
+            self.amf.valveMove(output)
 
             # Protect sample
-            assert self.pump.getFlowRate() < 101
+            assert self.amf.getFlowRate() < 500
 
             self.aquisition_label.setText(f'Aquiring Data: Dispensing medium {medium}')
 
             # Dispense and only capture during dispensing
-            self.pump.pumpDispenseVolume(volume,block=False)
+            self.amf.pumpDispenseVolume(volume,block=False)
             
             # While pumping, aquire
             timer = QElapsedTimer()
             timer.start()
-            while self.pump.getPumpStatus():
+            while self.amf.getPumpStatus():
                 if timer.hasExpired(2000):
                     self.take_media_shot()
                     timer.restart()
@@ -884,18 +879,18 @@ class MainWindow(QMainWindow):
 
         outputs = clean
 
-        self.pump.pullAndWait()
+        self.amf.pullAndWait()
 
-        self.pump.setFlowRate(1500,2)
+        self.amf.setFlowRate(1500,2)
         for i in range(5):
             for output in outputs:
-                self.pump.valveMove(water)
-                self.pump.pumpPickupVolume(volume)
-                self.pump.valveMove(output)
-                self.pump.pumpDispenseVolume(volume)
-                self.pump.pumpPickupVolume(volume)
-                self.pump.valveMove(waste)
-                self.pump.pumpDispenseVolume(volume)
+                self.amf.valveMove(water)
+                self.amf.pumpPickupVolume(volume)
+                self.amf.valveMove(output)
+                self.amf.pumpDispenseVolume(volume)
+                self.amf.pumpPickupVolume(volume)
+                self.amf.valveMove(waste)
+                self.amf.pumpDispenseVolume(volume)
     
     def move_stage(self, displacement: np.ndarray):
         displacement_micron = 3.45*displacement/40
