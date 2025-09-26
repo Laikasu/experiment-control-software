@@ -13,12 +13,17 @@ from collections import namedtuple
 
 # dllFolder = os.environ.get('NKTP_SDK_PATH',r'C:\NKTP_SDK')
 dllFolder = os.path.dirname(__file__)
+osname = os.name
 if (ctypes.sizeof(ctypes.c_voidp) == 4):
-    print('Loading x86 DLL from:', dllFolder + r'\NKTPDLL\x86\NKTPDLL.dll')
-    NKTPDLL = ctypes.cdll.LoadLibrary(dllFolder + r'\NKTPDLL\x86\NKTPDLL.dll')
+    #print('Loading x86 DLL from:',  os.path.join(dllFolder, 'NKTPDLL','x86','NKTPDLL.dll'))
+    path = os.path.join(dllFolder, 'NKTPDLL','x86','NKTPDLL.dll')
 else:
-    print('Loading x64 DLL from:', dllFolder + r'\NKTPDLL\x64\NKTPDLL.dll')
-    NKTPDLL = ctypes.cdll.LoadLibrary(dllFolder + r'\NKTPDLL\x64\NKTPDLL.dll')
+    #print('Loading x64 DLL from:', os.path.join(dllFolder, 'NKTPDLL','x64','NKTPDLL.dll'))
+    path = os.path.join(dllFolder, 'NKTPDLL','x64','NKTPDLL.dll')
+
+if os.name == 'nt':
+    NKTPDLL = ctypes.cdll.LoadLibrary(path)
+    
 
 
 def PortResultTypes(result):

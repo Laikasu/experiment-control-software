@@ -22,6 +22,7 @@ class Camera(QObject):
         self.grabber.event_add_device_lost(lambda g: QApplication.postEvent(self, QEvent(DEVICE_LOST_EVENT)))
         self.device_property_map = None
         self.property_dialog = None
+        self.trigger_mode = False
 
         self.update_statistics_timer = QTimer()
         self.update_statistics_timer.timeout.connect(self.update_statistics)
@@ -131,9 +132,17 @@ class Camera(QObject):
         self.updateCameraLabel()
         self.state_changed.emit()
     
+    def trigger(self):
+        if self.grabber.is_streaming:
+            self.device_property_map.execute_command(ic4.PropId.TRIGGER_SOFTWARE)
+    
+    def set_trigger_mode(self, mode):
+        self.trigger_mode = mode
+        self.device_property_map.set_value(ic4.PropId.TRIGGER_MODE, mode)
+    
     def onDeviceOpened(self):
         self.device_property_map = self.grabber.device_property_map
-
+        self.device_property_map.set_value(ic4.PropId.TRIGGER_MODE, False)
         self.device_property_map.set_value(ic4.PropId.OFFSET_AUTO_CENTER, 'Off')
         self.device_property_map.set_value(ic4.PropId.GAIN_AUTO, 'Off')
         self.device_property_map.set_value(ic4.PropId.GAIN, 0)
