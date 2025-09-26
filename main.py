@@ -7,8 +7,8 @@ from main_window import MainWindow
 def main():
     ic4.Library.init()
     app = QApplication()
-    app.setApplicationName("monitor")
-    app.setApplicationDisplayName("Monitor")
+    app.setApplicationName("experiment-control-software")
+    app.setApplicationDisplayName("Experiment Control Software")
     app.setStyle("fusion")
 
     w = MainWindow()
