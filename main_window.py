@@ -461,7 +461,6 @@ class MainWindow(QMainWindow):
         distance = 4
         positions = np.array([[0,0], [1,0], [1,1], [0,1]])*distance
         anchor = np.array(self.mmc.getXYPosition(self.xy_stage))
-        self.mmc.setXYPosition(anchor[0], anchor[1])
 
         for i, position in enumerate(positions):
             pos = position + anchor
@@ -712,13 +711,21 @@ class MainWindow(QMainWindow):
             # Dispense and only capture during dispensing
             self.amf.pumpDispenseVolume(volume,block=False)
             
-            # While pumping, aquire
-            timer = QElapsedTimer()
-            timer.start()
-            while self.amf.getPumpStatus():
-                if timer.hasExpired(2000):
-                    self.take_media_shot()
-                    timer.restart()
+            # Aquisition
+
+            # While pumping
+            # timer = QElapsedTimer()
+            # timer.start()
+            # while self.amf.getPumpStatus():
+            #     if timer.hasExpired(2000):
+            #         self.take_media_shot()
+            #         timer.restart()
+            self.amf.pullAndWait()
+            time.sleep(2)
+            self.take_media_shot()
+            time.sleep(2)
+
+
 
         self.aquisition_label.setText('Saving Images')
                 
