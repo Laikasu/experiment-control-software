@@ -678,8 +678,6 @@ class MainWindow(QMainWindow):
         self.aquisition_worker.done.connect(self.save_media_data)
         self.aquisition_worker.done.connect(self.finish_aquisition)
         self.aquisition_worker.start()
-        
-        
     
     def take_media_sweep(self):
         water = 10
@@ -839,8 +837,8 @@ class MainWindow(QMainWindow):
 
             metadata = self.generate_metadata()
             metadata['Setup.z_focus [um]'] = {
-                'Start': int(self.z_positions[0]),
-                'Stop': int(self.z_positions[-1]),
+                'Start': float(self.z_positions[0]),
+                'Stop': float(self.z_positions[-1]),
                 'Number': len(self.z_positions)}
             
             with open(filepath +'.yaml', 'w') as file:
