@@ -39,9 +39,9 @@ class MainWindow(QMainWindow):
     new_processed_frame = Signal(np.ndarray)
     def __init__(self):
         logging.basicConfig(level=logging.DEBUG)
-        app_dir = QDir(QCoreApplication.applicationDirPath())
+        self.app_dir = QDir(os.path.dirname(os.path.abspath(__file__)))
         QMainWindow.__init__(self)
-        self.setWindowIcon(QIcon(app_dir.filePath("images/tis.ico")))
+        self.setWindowIcon(QIcon(self.app_dir.filePath("images/tis.ico")))
 
         # Setup storage
         self.appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
@@ -56,7 +56,7 @@ class MainWindow(QMainWindow):
         self.save_videos_directory = video_directory
 
         # Load settings
-        # self.settings = QSettings('Casper', 'Monitor')
+        self.settings = QSettings('Casper', 'Monitor')
         # if not self.settings.contains('mmdir'):
         #     mmdir = QFileDialog(self,
         #                         fileMode=QFileDialog.FileMode.ExistingFile,
@@ -70,13 +70,13 @@ class MainWindow(QMainWindow):
             self.magnification = self.settings.value('magnification', type=int)
             self.pxsize = self.settings.value('pxsize', type=float)
         else:
-            self.magnification = 80 # Default
+            self.magnification = 60 # Default
             self.pxsize = 3.45
             self.set_setup_parameters()
 
         # Setup devices
         mm_dir = r'C:\Users\20224813\AppData\Local\pymmcore-plus\pymmcore-plus\mm'
-        self.setup_micromanager(mm_dir)
+        self.setup_micromanager(None)
 
         self.laser = Laser(self)
         self.laser.changedState.connect(self.update_controls)
@@ -87,7 +87,7 @@ class MainWindow(QMainWindow):
         self.pump.changedState.connect(self.update_controls)
         
         
-        self.grid = False
+        self.grid = True
         self.shot_count = 10 # Shoot 10 images to average over
         self.got_image_mutex = QMutex()
         self.got_image = QWaitCondition()
@@ -127,17 +127,27 @@ class MainWindow(QMainWindow):
         self.camera.reload_device()
     
 
-    def setup_micromanager(self, mm_dir):
-        application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
+    def setup_micromanager(self, mm_dir=None):
+        application_path = self.app_dir
         self.xy_stage = None
         self.z_stage = None
         
         self.mmc = CMMCorePlus.instance()
+
+        # Load micromanager
         try:
-            self.mmc.setDeviceAdapterSearchPaths([mm_dir])
-            self.mmc.loadSystemConfiguration(os.path.join(application_path, 'MMConfig.cfg'))
+            if mm_dir is not None:
+                self.mmc.setDeviceAdapterSearchPaths([mm_dir])
+        except Exception as e:
+            QMessageBox.warning(self, 'Error', f'failed to load mm: \n{e}')
+            return None
+        
+        # Load config
+        try:
+            self.mmc.loadSystemConfiguration(application_path.filePath('MMConfig.cfg'))
         except Exception as e:
             QMessageBox.warning(self, 'Error', f'failed to load mm config: \n{e}')
+            return None
         else:
             self.z_stage = self.mmc.getFocusDevice()
             self.xy_stage = self.mmc.getXYStageDevice()

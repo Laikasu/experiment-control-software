@@ -10,6 +10,7 @@ class Pump(QObject):
     def __init__(self, parent):
         super().__init__(parent=parent)
         self.amf = self.setup()
+        self.destroyed.connect(self.cleanup)
 
     def setup(self):
         logging.debug('Looking for pump')
@@ -40,3 +41,7 @@ class Pump(QObject):
             else:
                 self.setup()
         self.changedState.emit(self.open)
+    
+    def cleanup(self):
+        if self.open:
+            self.amf.disconnect()
