@@ -88,6 +88,7 @@ class MainWindow(QMainWindow):
         
         
         self.grid = False
+        self.shot_count = 10 # Shoot 10 images to average over
         self.got_image_mutex = QMutex()
         self.got_image = QWaitCondition()
 
@@ -468,9 +469,18 @@ class MainWindow(QMainWindow):
 
     def take_sequence(self):
         distance = 4
-        positions = np.array([[0,0], [1,0], [1,1], [0,1]])*distance
+        positions = np.array([[1,0], [1,1], [0,1]])*distance
         anchor = np.array(self.mmc.getXYPosition(self.xy_stage))
-        self.mmc.setXYPosition(anchor[0], anchor[1])
+
+        for i in range(self.shot_count):
+            self.camera.new_frame.connect(self.store_sequence_image, Qt.ConnectionType.SingleShotConnection)
+            self.trigger()
+            self.got_image_mutex.lock()
+            # Retry
+            while not self.got_image.wait(self.got_image_mutex, 1000):
+                self.camera.new_frame.connect(self.store_sequence_image, Qt.ConnectionType.SingleShotConnection)
+                self.trigger()
+            self.got_image_mutex.unlock()
 
         for i, position in enumerate(positions):
             pos = position + anchor
@@ -719,13 +729,21 @@ class MainWindow(QMainWindow):
             # Dispense and only capture during dispensing
             self.amf.pumpDispenseVolume(volume,block=False)
             
-            # While pumping, aquire
-            timer = QElapsedTimer()
-            timer.start()
-            while self.amf.getPumpStatus():
-                if timer.hasExpired(2000):
-                    self.take_media_shot()
-                    timer.restart()
+            # Aquisition
+
+            # While pumping
+            # timer = QElapsedTimer()
+            # timer.start()
+            # while self.amf.getPumpStatus():
+            #     if timer.hasExpired(2000):
+            #         self.take_media_shot()
+            #         timer.restart()
+            self.amf.pullAndWait()
+            time.sleep(2)
+            self.take_media_shot()
+            time.sleep(2)
+
+
 
         self.aquisition_label.setText('Saving Images')
                 
@@ -801,7 +819,7 @@ class MainWindow(QMainWindow):
             self.z_position = i
             self.mmc.setZPosition(pos)
             self.mmc.waitForDevice(self.z_stage)
-            time.sleep(0.5)
+            time.sleep(1)
             # Take picture
             if self.grid:
                 self.photos = []
@@ -841,7 +859,7 @@ class MainWindow(QMainWindow):
             
             images = np.array(self.z_data_raw)
 
-            if np.shape(images)[1] == 4:
+            if np.shape(images)[1] >= 4:
                 np.save(filepath + '.npy', images)
                 images = images[:,0]
                 # diff = np.array([pc.background_subtracted(photos[0], pc.common_background(photos)) for photos in images])
@@ -944,6 +962,8 @@ class MainWindow(QMainWindow):
             'Camera.fps': self.camera.device_property_map.get_value_float(ic4.PropId.ACQUISITION_FRAME_RATE),
             'Camera.exposure_time [us]': exposure_time,
             'Camera.pixel_size [um]': self.pxsize,
+            'Camera.grid': self.grid,
+            'Camera.averaging': self.shot_count,
             'Setup.magnification': self.magnification,
             'Laser.wavelength [nm]': self.laser.wavelen,
             'Laser.bandwith [nm]': self.laser.bandwith,
