@@ -1,4 +1,4 @@
-from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, Signal, QThread, QWaitCondition, QMutex, QSettings, QElapsedTimer
+from PySide6.QtCore import QStandardPaths, QCoreApplication, QDir, QTimer, QEvent, QFileInfo, Qt, Signal, QThread, QWaitCondition, QMutex, QSettings, QElapsedTimer
 from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar, QPushButton, QInputDialog
 
@@ -9,6 +9,7 @@ import tifffile as tiff
 import cv2
 import time
 import yaml
+from pathlib import Path
 
 # Stage
 from pymmcore_plus import CMMCorePlus
@@ -38,12 +39,42 @@ class MainWindow(QMainWindow):
     new_processed_frame = Signal(np.ndarray)
     def __init__(self):
         logging.basicConfig(level=logging.DEBUG)
-        application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
+        app_dir = QDir(QCoreApplication.applicationDirPath())
         QMainWindow.__init__(self)
-        self.setWindowIcon(QIcon(application_path + '/images/tis.ico'))
+        self.setWindowIcon(QIcon(app_dir.filePath("images/tis.ico")))
+
+        # Setup storage
+        self.appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
+        picture_directory = QStandardPaths.writableLocation(QStandardPaths.PicturesLocation)
+        video_directory = QStandardPaths.writableLocation(QStandardPaths.MoviesLocation)
+        QDir(self.appdata_directory).mkpath('.')
+
+        self.data_directory = picture_directory + '/Data'
+        QDir(self.data_directory).mkpath('.')
+        self.backgrounds_directory = picture_directory + '/Backgrounds'
+        QDir(self.backgrounds_directory).mkpath('.')
+        self.save_videos_directory = video_directory
+
+        # Load settings
+        # self.settings = QSettings('Casper', 'Monitor')
+        # if not self.settings.contains('mmdir'):
+        #     mmdir = QFileDialog(self,
+        #                         fileMode=QFileDialog.FileMode.ExistingFile,
+        #                         acceptMode=QFileDialog.AcceptMode.AcceptOpen,
+        #                         filter='TIFF (*.tif)')
+        #     self.settings.setValue('mmdir', )
+        # mm_dir = self.settings.value('mmdir', type=str)
+
+
+        if self.settings.contains('magnification') and self.settings.contains('pxsize'):
+            self.magnification = self.settings.value('magnification', type=int)
+            self.pxsize = self.settings.value('pxsize', type=float)
+        else:
+            self.magnification = 80 # Default
+            self.pxsize = 3.45
+            self.set_setup_parameters()
 
         # Setup devices
-
         mm_dir = r'C:\Users\20224813\AppData\Local\pymmcore-plus\pymmcore-plus\mm'
         self.setup_micromanager(mm_dir)
 
@@ -67,30 +98,8 @@ class MainWindow(QMainWindow):
 
         self.temp_video_file = None
 
-        # Load settings
-        self.settings = QSettings('Casper', 'Monitor')
-        if self.settings.contains('magnification') and self.settings.contains('pxsize'):
-            self.magnification = self.settings.value('magnification', type=int)
-            self.pxsize = self.settings.value('pxsize', type=float)
-        else:
-            self.magnification = 80 # Default
-            self.pxsize = 3.45
-            self.set_setup_parameters()
-
         
 
-        # Make sure the %appdata%/demoapp directory exists
-        appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
-        picture_directory = QStandardPaths.writableLocation(QStandardPaths.PicturesLocation)
-        video_directory = QStandardPaths.writableLocation(QStandardPaths.MoviesLocation)
-        QDir(appdata_directory).mkpath('.')
-        
-
-        self.data_directory = picture_directory + '/Data'
-        QDir(self.data_directory).mkpath('.')
-        self.backgrounds_directory = picture_directory + '/Backgrounds'
-        QDir(self.backgrounds_directory).mkpath('.')
-        self.save_videos_directory = video_directory
         
 
         self.video_view = VideoView(self)
@@ -589,7 +598,7 @@ class MainWindow(QMainWindow):
             
             # also contains raw data
             tiff.imwrite(filepath + '.tif', pc.float_to_mono(diff))
-            np.save(os.path.splitext(filepath)[0] + '_raw.npy', self.photos)
+            np.save(os.path.splitext(filepath)[0] + '.npy', self.photos)
 
             metadata = self.generate_metadata()
             with open(filepath+'.yaml', 'w') as file:
@@ -653,7 +662,7 @@ class MainWindow(QMainWindow):
             images = np.array(self.laser_data_raw)
 
             if np.shape(images)[1] == 4:
-                np.save(filepath + '_raw.npy', images)
+                np.save(filepath + '.npy', images)
                 images = images[:,0]
                 #diff = np.array([pc.background_subtracted(photos[0], pc.common_background(photos)) for photos in images])
                 #images = pc.float_to_mono(diff)
@@ -753,7 +762,7 @@ class MainWindow(QMainWindow):
             images = np.array(self.media_data_raw)
 
             if np.shape(images)[1] == 4:
-                np.save(filepath + '_raw.npy', images)
+                np.save(filepath + '.npy', images)
                 images = images[:,0]
             
             tiff.imwrite(filepath + '.tif', images)
@@ -779,6 +788,8 @@ class MainWindow(QMainWindow):
     
     def take_z_sweep(self):
         z_zero = self.mmc.getZPosition()
+        #z_zero = self.mmc.getPosition('PFSOffset') # Ti2
+        #z_zero = self.mmc.getProperty('PFS', 'Position') # Ti-E
         N = len(self.z_positions)
         
         self.z_data_raw = []
@@ -807,7 +818,10 @@ class MainWindow(QMainWindow):
                     self.trigger()
                 self.got_image_mutex.unlock()
 
-        self.mmc.setZPosition(z_zero)
+        #self.mmc.setZPosition(z_zero)
+        #self.mmc.setPosition('PFSOoffset', z_zero) # Ti2
+        #self.mmc.setProperty('PFS', 'Position', z_zero) # Ti-E
+
         self.aquisition_label.setText('Saving Images')
         
     def store_z_data(self, image: np.ndarray):
@@ -828,7 +842,7 @@ class MainWindow(QMainWindow):
             images = np.array(self.z_data_raw)
 
             if np.shape(images)[1] == 4:
-                np.save(filepath + '_raw.npy', images)
+                np.save(filepath + '.npy', images)
                 images = images[:,0]
                 # diff = np.array([pc.background_subtracted(photos[0], pc.common_background(photos)) for photos in images])
                 # images = pc.float_to_mono(diff)
