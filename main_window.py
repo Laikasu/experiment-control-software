@@ -806,9 +806,9 @@ class MainWindow(QMainWindow):
     # Make a Z sweep
 
     def z_sweep(self):
-        dialog = SweepDialog(self, title='Z Sweep Data', limits=(-10, 10, -10, 10), defaults=(0, 1, 10), unit='micron')
+        dialog = SweepDialog(self, title='Z Sweep Data', limits=(-10, 10, -10, 10), defaults=(-1, 1, 10), unit='micron')
         if dialog.exec() and not self.aquiring:
-            self.z_positions = np.linspace(*dialog.get_values())
+            self.z_positions = np.linspace(*dialog.get_values())*10/1.4
             self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_z_sweep)
             self.aquisition_worker.done.connect(self.save_z_data)
             self.aquisition_worker.done.connect(self.finish_aquisition)
