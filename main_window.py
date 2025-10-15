@@ -829,7 +829,7 @@ class MainWindow(QMainWindow):
             self.z_position = i
             self.mmc.setZPosition(pos)
             self.mmc.waitForDevice(self.z_stage)
-            time.sleep(1)
+            time.sleep(2)
             # Take picture
             if self.grid:
                 self.photos = []
@@ -846,7 +846,7 @@ class MainWindow(QMainWindow):
                     self.trigger()
                 self.got_image_mutex.unlock()
 
-        #self.mmc.setZPosition(z_zero)
+        self.mmc.setZPosition(z_zero)
         #self.mmc.setPosition('PFSOoffset', z_zero) # Ti2
         #self.mmc.setProperty('PFS', 'Position', z_zero) # Ti-E
 
