@@ -753,7 +753,7 @@ class MainWindow(QMainWindow):
         
     def take_laser_defocus_sweep_z(self):
         z_zero = self.mmc.getZPosition()
-        self.z_positions = np.linspace(-1, 1, 10)
+        self.z_positions = np.linspace(-0.1, 0.1, 2)
         self.wavelens = np.linspace(500, 600, 5)
         N = len(self.z_positions)
         
@@ -782,7 +782,8 @@ class MainWindow(QMainWindow):
             filepath = dialog.selectedFiles()[0]
             filepath = os.path.splitext(filepath)[0]
             
-            images = np.array(self.laser_data_raw).reshape(len(self.z_positions), len(self.wavelens), self.shot_count+3)
+            shape = np.shape(np.squeeze(self.laser_defocus_data_raw))
+            images = np.array(self.laser_defocus_data_raw).reshape(len(self.z_positions), len(self.wavelens), *shape[1:])
             np.save(filepath + '.npy', images)
 
             metadata = self.generate_metadata()
