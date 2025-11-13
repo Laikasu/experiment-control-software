@@ -96,7 +96,7 @@ class MainWindow(QMainWindow):
         self.pump.changedState.connect(self.update_controls)
         
         
-        self.grid = False
+        self.grid = True
         self.shot_count = 10 # Shoot 10 images to average over
         self.got_image_mutex = QMutex()
         self.got_image = QWaitCondition()
@@ -233,9 +233,13 @@ class MainWindow(QMainWindow):
         self.laser_sweep_act = QAction('Sweep Laser')
         self.laser_sweep_act.triggered.connect(self.laser_sweep)
 
-        self.z_sweep_act = QAction('Focus Sweep')
+        self.z_sweep_act = QAction('Defocus Sweep')
         self.z_sweep_act.setStatusTip('Perform a focus sweep')
         self.z_sweep_act.triggered.connect(self.z_sweep)
+
+        self.z_wavelen_sweep_act = QAction('Defocus wavelen Sweep')
+        self.z_wavelen_sweep_act.setStatusTip('Perform a focus sweep')
+        self.z_wavelen_sweep_act.triggered.connect(self.laser_defocus_sweep)
 
         self.media_act = QAction('Vary Media')
         self.media_act.setStatusTip('Perform a temporal variation of media')
@@ -309,6 +313,7 @@ class MainWindow(QMainWindow):
         capture_menu.addAction(self.snap_processed_photo_act)
         capture_menu.addSeparator()
         capture_menu.addAction(self.z_sweep_act)
+        capture_menu.addAction(self.z_wavelen_sweep_act)
         capture_menu.addAction(self.toggle_grid_act)
         capture_menu.addAction(self.media_act)
         capture_menu.addAction(self.cancel_aquisition_act)
@@ -373,8 +378,8 @@ class MainWindow(QMainWindow):
         
 
     def update_controls(self):
-        self.laser_window.setVisible(self.laser.open)
-        self.laser_parameters_act.setEnabled(self.laser.open)
+        self.laser_window.setVisible(self.laser.open and not self.aquiring)
+        self.laser_parameters_act.setEnabled(self.laser.open and not self.aquiring)
         grabber = self.camera.grabber
         if not grabber.is_device_open:
             self.statistics_label.clear()
@@ -507,7 +512,7 @@ class MainWindow(QMainWindow):
                 self.camera.new_frame.connect(self.store_sequence_image, Qt.ConnectionType.SingleShotConnection)
                 self.trigger()
             self.got_image_mutex.unlock()
-
+            
         for i, position in enumerate(positions):
             pos = position + anchor
             self.mmc.setXYPosition(pos[0], pos[1])
@@ -668,7 +673,7 @@ class MainWindow(QMainWindow):
                 self.photos = []
                 self.take_sequence()
                 self.laser_data_raw.append(self.photos)
-                self.background = pc.common_background(self.photos)
+                #self.background = pc.common_background(self.photos)
             else:
                 self.got_image_mutex.lock()
                 self.camera.new_frame.connect(self.store_laser_data, Qt.ConnectionType.SingleShotConnection)
@@ -715,7 +720,86 @@ class MainWindow(QMainWindow):
         self.data_directory = dialog.directory()
         self.aquisition_label.setText('')
         self.statusBar().showMessage('Done!')
+    
+    def laser_defocus_sweep(self):
+        if not self.aquiring:
+            self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_laser_defocus_sweep_z)
+            self.aquisition_worker.done.connect(self.save_laser_defocus_data)
+            self.aquisition_worker.done.connect(self.finish_aquisition)
+            self.aquisition_worker.start()
+    
+    def take_laser_defocus_sweep_wavelen(self):
+        N = len(self.wavelens)
+        self.laser.set_wavelen(self.wavelens[0])
+        time.sleep(5)
+        for i, wavelen in enumerate(self.wavelens):
+            self.aquisition_label.setText(f'Aquiring Data: laser sweep progression {i+1}/{N}')
+            self.laser.set_wavelen(wavelen)
+            time.sleep(0.5)
+            if self.grid:
+                self.photos = []
+                self.take_sequence()
+                self.laser_defocus_data_raw.append(self.photos)
+                #self.background = pc.common_background(self.photos)
+            else:
+                self.got_image_mutex.lock()
+                self.camera.new_frame.connect(self.store_laser_defocus__data, Qt.ConnectionType.SingleShotConnection)
+                self.trigger()
+                # Retry
+                while not self.got_image.wait(self.got_image_mutex, 1000):
+                    self.camera.new_frame.connect(self.store_laser_data, Qt.ConnectionType.SingleShotConnection)
+                    self.trigger()
+                self.got_image_mutex.unlock()
+        
+    def take_laser_defocus_sweep_z(self):
+        z_zero = self.mmc.getZPosition()
+        self.z_positions = np.linspace(-1, 1, 10)
+        self.wavelens = np.linspace(500, 600, 5)
+        N = len(self.z_positions)
+        
+        self.laser_defocus_data_raw = []
+        for i, z in enumerate(self.z_positions):
+            #self.aquisition_label.setText(f'Aquiring Data: z sweep progression {i+1}/{N}')
 
+            # Set position
+            pos = z_zero + z
+            self.z_position = i
+            self.mmc.setZPosition(pos)
+            self.mmc.waitForDevice(self.z_stage)
+            time.sleep(1)
+            # Take wavelen sweep
+            self.take_laser_defocus_sweep_wavelen()
+
+        self.aquisition_label.setText('Saving Images')
+
+    def save_laser_defocus_data(self):
+        dialog = QFileDialog(self, 'Save Wavelength defocus Sweep')
+        dialog.setNameFilter('raw data (*.npy)')
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setDirectory(self.data_directory)
+        if dialog.exec():
+            filepath = dialog.selectedFiles()[0]
+            filepath = os.path.splitext(filepath)[0]
+            
+            images = np.array(self.laser_data_raw).reshape(len(self.z_positions), len(self.wavelens), self.shot_count+3)
+            np.save(filepath + '.npy', images)
+
+            metadata = self.generate_metadata()
+            metadata['Laser.wavelength [nm]'] = {
+                'Start': int(self.wavelens[0]),
+                'Stop': int(self.wavelens[-1]),
+                'Number': len(self.wavelens)}
+            metadata['Setup.defocus [um]'] = {
+                'Start': float(self.z_positions[0]),
+                'Stop': float(self.z_positions[-1]),
+                'Number': len(self.z_positions)}
+            
+            with open(filepath+'.yaml', 'w') as file:
+                yaml.dump(metadata, file)
+        self.data_directory = dialog.directory()
+        self.aquisition_label.setText('')
+        self.statusBar().showMessage('Done!')
     
     # Media sweep
     def media_sweep(self):
@@ -894,7 +978,7 @@ class MainWindow(QMainWindow):
             tiff.imwrite(filepath + '.tif', images)
 
             metadata = self.generate_metadata()
-            metadata['Setup.z_focus [um]'] = {
+            metadata['Setup.defocus [um]'] = {
                 'Start': float(self.z_positions[0]),
                 'Stop': float(self.z_positions[-1]),
                 'Number': len(self.z_positions)}

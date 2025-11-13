@@ -54,7 +54,7 @@ class Laser(QObject):
         else:
             self.open = False
             if warning:
-                QMessageBox.warning(self.parent(),'Error', 'Failed opening laser: self.port busy.')
+                QMessageBox.warning(self.parent(),'Error', 'Failed opening laser: port busy.')
         self.changedState.emit(self.open)
     
     def release(self):
