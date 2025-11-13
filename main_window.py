@@ -909,7 +909,7 @@ class MainWindow(QMainWindow):
     def z_sweep(self):
         dialog = SweepDialog(self, title='Z Sweep Data', limits=(-10, 10, -10, 10), defaults=(0, 1, 10), unit='micron')
         if dialog.exec() and not self.aquiring:
-            self.z_positions = np.linspace(*dialog.get_values())
+            self.z_positions = np.linspace(*dialog.get_values())*10/1.4
             self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_z_sweep)
             self.aquisition_worker.done.connect(self.save_z_data)
             self.aquisition_worker.done.connect(self.finish_aquisition)
@@ -947,7 +947,7 @@ class MainWindow(QMainWindow):
                     self.trigger()
                 self.got_image_mutex.unlock()
 
-        #self.mmc.setZPosition(z_zero)
+        self.mmc.setZPosition(z_zero)
         #self.mmc.setPosition('PFSOoffset', z_zero) # Ti2
         #self.mmc.setProperty('PFS', 'Position', z_zero) # Ti-E
 
