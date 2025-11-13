@@ -6,8 +6,10 @@ This is a live monitoring software for use in my experment. It is written in Pyt
 
 This software requires a GenTL producer to connect to a camera.
 This can be found on the website of the imaging source.
-
 https://www.theimagingsource.com/en-us/support/download/
+
+It also requires a micromanager setup. This can be downloaded at:
+https://micro-manager.org/Micro-Manager_Nightly_Builds
 
 The dependent python modules are found in the requirements text file.
 

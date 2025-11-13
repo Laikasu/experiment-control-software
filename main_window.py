@@ -56,7 +56,7 @@ class MainWindow(QMainWindow):
         self.save_videos_directory = video_directory
 
         # Load settings
-        # self.settings = QSettings('Casper', 'Monitor')
+        self.settings = QSettings('Casper', 'Monitor')
         # if not self.settings.contains('mmdir'):
         #     mmdir = QFileDialog(self,
         #                         fileMode=QFileDialog.FileMode.ExistingFile,
