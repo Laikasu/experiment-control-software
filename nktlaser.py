@@ -12,58 +12,62 @@ class Laser(QObject):
         self.open = False
         self.trigger_mode = 0 # Internal
         self.pulses = 10
+        self.port = None
         if os.name == 'nt':
             self.grab(warning=False)
         else:
-            QMessageBox.warning(self.parent(), 'Error', 'Failed opening laser: Linux/Mac are not supported due to the NKT laser only providing .dll')
+            QMessageBox.warning(self.parent(), 'Error', 'Failed opening laser: Linux/Mac are not supself.ported due to the NKT laser only providing .dll')
         
     
     def set_emission(self, emit: bool):
         # Turn on
-        nkt.registerWriteU8('COM4', 1, 0x30, emit, -1)
+        nkt.registerWriteU8(self.port, 1, 0x30, emit, -1)
 
     def trigger(self):
         if self.open:
             #Trigger
-            nkt.registerWriteU16('COM4', 1, 0x34, self.pulses, -1)
+            nkt.registerWriteU16(self.port, 1, 0x34, self.pulses, -1)
     
     def set_trigger_mode(self, mode):
         # Trigger if True else Internal
         self.trigger_mode = 2 if mode else 0
         if self.open:
-            nkt.registerWriteU8('COM4', 1, 0x31, self.trigger_mode, -1)
+            nkt.registerWriteU8(self.port, 1, 0x31, self.trigger_mode, -1)
 
 
     def grab(self, warning=True):
-        result = nkt.openPorts('COM4', 1, 1)
+        ports = nkt.getAllPorts()
+        result = nkt.openPorts(ports, 1, 1)
+        
         if result == 0:
             self.open = True
+            self.port = nkt.getOpenPorts()
             # Unlock interlock
-            nkt.registerWriteU16('COM4', 1, 0x32, 1, -1)
+            nkt.registerWriteU16(self.port, 1, 0x32, 1, -1)
             # Trigger mode
-            nkt.registerWriteU8('COM4', 1, 0x31, self.trigger_mode, -1)
+            nkt.registerWriteU8(self.port, 1, 0x31, self.trigger_mode, -1)
             self.set_emission(True)
-            lower = nkt.registerReadU16('COM4', 16, 0x34, -1)[1]/10
-            higher = nkt.registerReadU16('COM4', 16, 0x33, -1)[1]/10
+            lower = nkt.registerReadU16(self.port, 16, 0x34, -1)[1]/10
+            higher = nkt.registerReadU16(self.port, 16, 0x33, -1)[1]/10
             self.bandwith = higher - lower
             self.wavelen = lower + self.bandwith/2
         else:
             self.open = False
             if warning:
-                QMessageBox.warning(self.parent(),'Error', 'Failed opening laser: port busy.')
+                QMessageBox.warning(self.parent(),'Error', 'Failed opening laser: self.port busy.')
         self.changedState.emit(self.open)
     
     def release(self):
         self.set_emission(False)
-        nkt.closePorts('COM4')
+        nkt.closePorts(self.port)
         self.open = False
         self.changedState.emit(self.open)
     
     def set_lower(self, wavelen: float):
-        nkt.registerWriteU16('COM4', 16, 0x34, int(wavelen*10), -1)
+        nkt.registerWriteU16(self.port, 16, 0x34, int(wavelen*10), -1)
     
     def set_upper(self, wavelen: float):
-        nkt.registerWriteU16('COM4', 16, 0x33, int(wavelen*10), -1)
+        nkt.registerWriteU16(self.port, 16, 0x33, int(wavelen*10), -1)
     
     def set_bandwith(self, width: float):
         self.bandwith = width
@@ -80,10 +84,10 @@ class Laser(QObject):
             self.grab()
     
     def get_frequency(self) -> int:
-        return nkt.registerReadU32('COM4', 1, 0x71, -1)[1]/1000
+        return nkt.registerReadU32(self.port, 1, 0x71, -1)[1]/1000
 
     def __del__(self):
         if self.open:
             self.set_emission(False)
             self.release()
-            nkt.closePorts('COM4')
+            nkt.closePorts(self.port)

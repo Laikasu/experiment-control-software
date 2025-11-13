@@ -20,7 +20,7 @@ from nktlaser import Laser
 # Pump
 from lspone import Pump
 
-from widgets import VideoView, SweepDialog, PropertiesDialog
+from widgets import VideoView, SweepDialog, PropertiesDialog, LaserWindow
 import processing as pc
 from camera import Camera
 
@@ -78,8 +78,17 @@ class MainWindow(QMainWindow):
         mm_dir = r'C:\Users\20224813\AppData\Local\pymmcore-plus\pymmcore-plus\mm'
         self.setup_micromanager(mm_dir)
 
+        self.laser_window = LaserWindow(self)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.laser_window)
+        self.laser_window.hide()
+
         self.laser = Laser(self)
         self.laser.changedState.connect(self.update_controls)
+        self.laser.changedState.connect(self.update_laser_control)
+
+        self.update_laser_control()
+        self.laser_window.centerChanged.connect(self.laser.set_wavelen)
+        self.laser_window.bandwidthChanged.connect(self.laser.set_bandwith)
 
         # Attempt to setup pump
         self.pump = Pump(self)
@@ -125,6 +134,7 @@ class MainWindow(QMainWindow):
         self.createUI()
         self.update_controls()
         self.camera.reload_device()
+            
     
 
     def setup_micromanager(self, mm_dir):
@@ -143,7 +153,11 @@ class MainWindow(QMainWindow):
             self.xy_stage = self.mmc.getXYStageDevice()
             logging.debug('Connected to micromanager')
     
-    
+    def update_laser_control(self):
+        if self.laser.open:
+            bandwidth = self.laser.bandwith
+            wavelen = self.laser.wavelen
+            self.laser_window.set_values(wavelen, bandwidth)
             
     def createUI(self):
         self.resize(1024, 768)
@@ -158,7 +172,7 @@ class MainWindow(QMainWindow):
         self.device_select_act.setShortcut(QKeySequence.Open)
         self.device_select_act.triggered.connect(partial(self.camera.onSelectDevice, self))
 
-        self.device_properties_act = QAction(QIcon(application_path + 'images/imgset.png'), '&Properties', self)
+        self.device_properties_act = QAction(QIcon(application_path + 'images/imgset.png'), '&Camera Properties', self)
         self.device_properties_act.setStatusTip('Show device property dialog')
         self.device_properties_act.triggered.connect(partial(self.camera.onDeviceProperties, self))
 
@@ -183,7 +197,11 @@ class MainWindow(QMainWindow):
         self.close_device_act = QAction('Close', self)
         self.close_device_act.setStatusTip('Close the currently opened device')
         self.close_device_act.setShortcuts(QKeySequence.Close)
-        self.close_device_act.triggered.connect(self.camera.onCloseDevice)
+        self.close_device_act.triggered.connect(self.camera.onCloseDevice) 
+
+        self.laser_parameters_act = QAction(QIcon(application_path + 'images/wavelen.png'), '&Laser Properties', self)
+        self.laser_parameters_act.setStatusTip('Show laser properties dialog')
+        self.laser_parameters_act.triggered.connect(lambda: self.laser_window.setVisible(not self.laser_window.isVisible()))
 
         self.set_roi_act = QAction('Select ROI', self)
         self.set_roi_act.setStatusTip('Draw a rectangle to set ROI')
@@ -268,6 +286,7 @@ class MainWindow(QMainWindow):
         device_menu = self.menuBar().addMenu('&Device')
         device_menu.addAction(self.device_select_act)
         device_menu.addAction(self.device_properties_act)
+        device_menu.addAction(self.laser_parameters_act)
         device_menu.addAction(self.device_driver_properties_act)
         device_menu.addAction(self.trigger_mode_act)
         device_menu.addAction(self.pulses_act)
@@ -305,7 +324,8 @@ class MainWindow(QMainWindow):
         self.addToolBar(Qt.TopToolBarArea, toolbar)
         toolbar.addAction(self.device_select_act)
         toolbar.addAction(self.device_properties_act)
-        toolbar.addAction(self.trigger_mode_act)
+        toolbar.addAction(self.laser_parameters_act)
+        #toolbar.addAction(self.trigger_mode_act)
         toolbar.addSeparator()
         toolbar.addAction(self.start_live_act)
         toolbar.addAction(self.video_act)
@@ -319,8 +339,10 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.laser_sweep_act)
         toolbar.addAction(self.z_sweep_act)
         toolbar.addAction(self.media_act)
-        # button = QPushButton('metadata', toolbar)
-        # button.clicked.connect(self.generate_metadata)
+
+        
+        # button = QPushButton('Test', toolbar)
+        # button.clicked.connect(self.test)
         # toolbar.addWidget(button)
 
 
@@ -338,7 +360,9 @@ class MainWindow(QMainWindow):
         self.camera_label = QLabel(self.statusBar())
         self.statusBar().addPermanentWidget(self.camera_label)
         self.camera.label_update.connect(self.camera_label.setText)
-        
+    
+    # def test(self, button):
+    #         print(self.laser.open)
 
     def set_setup_parameters(self):
         dialog = PropertiesDialog(self)
@@ -349,6 +373,8 @@ class MainWindow(QMainWindow):
         
 
     def update_controls(self):
+        self.laser_window.setVisible(self.laser.open)
+        self.laser_parameters_act.setEnabled(self.laser.open)
         grabber = self.camera.grabber
         if not grabber.is_device_open:
             self.statistics_label.clear()
