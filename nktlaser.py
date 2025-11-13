@@ -7,11 +7,13 @@ from PySide6.QtWidgets import QMessageBox
 
 class Laser(QObject):
     changedState = Signal(bool)
+    
     def __init__(self, parent):
         super().__init__(parent=parent)
         self.open = False
         self.trigger_mode = 0 # Internal
         self.pulses = 10
+        self.destroyed.connect(self.cleanup)
         self.port = None
         if os.name == 'nt':
             self.grab(warning=False)
@@ -85,9 +87,10 @@ class Laser(QObject):
     
     def get_frequency(self) -> int:
         return nkt.registerReadU32(self.port, 1, 0x71, -1)[1]/1000
+    
+    
 
-    def __del__(self):
+    def cleanup(self):
         if self.open:
-            self.set_emission(False)
             self.release()
             nkt.closePorts(self.port)

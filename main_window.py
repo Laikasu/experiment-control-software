@@ -39,9 +39,9 @@ class MainWindow(QMainWindow):
     new_processed_frame = Signal(np.ndarray)
     def __init__(self):
         logging.basicConfig(level=logging.DEBUG)
-        app_dir = QDir(QCoreApplication.applicationDirPath())
+        self.app_dir = QDir(os.path.dirname(os.path.abspath(__file__)))
         QMainWindow.__init__(self)
-        self.setWindowIcon(QIcon(app_dir.filePath("images/tis.ico")))
+        self.setWindowIcon(QIcon(self.app_dir.filePath("images/tis.ico")))
 
         # Setup storage
         self.appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
@@ -70,13 +70,13 @@ class MainWindow(QMainWindow):
             self.magnification = self.settings.value('magnification', type=int)
             self.pxsize = self.settings.value('pxsize', type=float)
         else:
-            self.magnification = 80 # Default
+            self.magnification = 60 # Default
             self.pxsize = 3.45
             self.set_setup_parameters()
 
         # Setup devices
         mm_dir = r'C:\Users\20224813\AppData\Local\pymmcore-plus\pymmcore-plus\mm'
-        self.setup_micromanager(mm_dir)
+        self.setup_micromanager(None)
 
         self.laser_window = LaserWindow(self)
         self.addDockWidget(Qt.RightDockWidgetArea, self.laser_window)
@@ -137,17 +137,27 @@ class MainWindow(QMainWindow):
             
     
 
-    def setup_micromanager(self, mm_dir):
-        application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
+    def setup_micromanager(self, mm_dir=None):
+        application_path = self.app_dir
         self.xy_stage = None
         self.z_stage = None
         
         self.mmc = CMMCorePlus.instance()
+
+        # Load micromanager
         try:
-            self.mmc.setDeviceAdapterSearchPaths([mm_dir])
-            self.mmc.loadSystemConfiguration(os.path.join(application_path, 'MMConfig.cfg'))
+            if mm_dir is not None:
+                self.mmc.setDeviceAdapterSearchPaths([mm_dir])
+        except Exception as e:
+            QMessageBox.warning(self, 'Error', f'failed to load mm: \n{e}')
+            return None
+        
+        # Load config
+        try:
+            self.mmc.loadSystemConfiguration(application_path.filePath('MMConfig.cfg'))
         except Exception as e:
             QMessageBox.warning(self, 'Error', f'failed to load mm config: \n{e}')
+            return None
         else:
             self.z_stage = self.mmc.getFocusDevice()
             self.xy_stage = self.mmc.getXYStageDevice()
@@ -907,7 +917,7 @@ class MainWindow(QMainWindow):
     # Make a Z sweep
 
     def z_sweep(self):
-        dialog = SweepDialog(self, title='Z Sweep Data', limits=(-10, 10, -10, 10), defaults=(0, 1, 10), unit='micron')
+        dialog = SweepDialog(self, title='Z Sweep Data', limits=(-10, 10, -10, 10), defaults=(-1, 1, 10), unit='micron')
         if dialog.exec() and not self.aquiring:
             self.z_positions = np.linspace(*dialog.get_values())*10/1.4
             self.aquisition_worker = self.AquisitionWorkerThread(self, self.take_z_sweep)
@@ -922,7 +932,7 @@ class MainWindow(QMainWindow):
         N = len(self.z_positions)
         
         self.z_data_raw = []
-        for i, z in enumerate(self.z_positions):
+        for i, z in enumerate(self.z_positions*10/1.4):
             self.aquisition_label.setText(f'Aquiring Data: z sweep progression {i+1}/{N}')
 
             # Set position
@@ -930,7 +940,7 @@ class MainWindow(QMainWindow):
             self.z_position = i
             self.mmc.setZPosition(pos)
             self.mmc.waitForDevice(self.z_stage)
-            time.sleep(1)
+            time.sleep(2)
             # Take picture
             if self.grid:
                 self.photos = []
