@@ -532,14 +532,6 @@ class MainWindow(QMainWindow):
     # =====================================================
     # ===============   Aquisitions   =====================
     # =====================================================
-
-    def action(*actions):
-        """Define action chains"""
-        if len(actions) == 1:
-            # Final action
-            return actions[0]()
-        else:
-            return lambda: actions[0](*actions[1:])
         
     class AquisitionWorkerThread(QThread):
         done = Signal()
@@ -587,6 +579,14 @@ class MainWindow(QMainWindow):
     # =====================================================
     # =================   Actions   =======================
     # =====================================================
+
+    def action(*actions):
+        """Define action chains"""
+        if len(actions) == 1:
+            # Final action
+            return actions[0]()
+        else:
+            return lambda: actions[0](*actions[1:])
 
     def take_z_sweep(self, *actions):
         """Move to different defocus then perform next action"""
@@ -787,7 +787,7 @@ class MainWindow(QMainWindow):
             
             data = np.squeeze(self.photos)
             shape = np.shape(data)
-            images = images.reshape(len(self.wavelens), self.shot_count+3, *shape[1:])
+            images = data.reshape(len(self.wavelens), self.shot_count+3, *shape[1:])
             np.save(filepath + '.npy', images)
             tiff.imwrite(filepath + '.tif', images[:,0])
 
@@ -818,12 +818,10 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             filepath = dialog.selectedFiles()[0]
             filepath = os.path.splitext(filepath)[0]
-            
-            images = np.array(self.z_data_raw)
 
             data = np.squeeze(self.photos)
             shape = np.shape(data)
-            images = images.reshape(len(self.z_positions), self.shot_count+3, *shape[1:])
+            images = data.reshape(len(self.z_positions), self.shot_count+3, *shape[1:])
             np.save(filepath + '.npy', images)
             tiff.imwrite(filepath + '.tif', images[:,0])
 
@@ -845,7 +843,7 @@ class MainWindow(QMainWindow):
         self.z_positions = np.linspace(-0.1, 0.1, 5)
         self.start_aquisition(self.save_laser_defocus_data,
                               self.take_z_sweep, self.take_laser_sweep, self.take_sequence_avg)
-
+    
     def save_laser_defocus_data(self):
         dialog = QFileDialog(self, 'Save Wavelength defocus Sweep')
         dialog.setNameFilter('raw data (*.npy)')
