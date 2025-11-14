@@ -288,7 +288,7 @@ class MainController(QObject):
     def laser_sweep(self):
         bandwidth = self.laser.bandwith
         band_radius = self.laser.bandwith/2
-        dialog = SweepDialog(self, title='Laser Sweep Data', limits=(390+band_radius, 850-bandwidth, 390+bandwidth, 850-band_radius), defaults=(500, 600, 10), unit='nm')
+        dialog = SweepDialog(title='Laser Sweep Data', limits=(390+band_radius, 850-bandwidth, 390+bandwidth, 850-band_radius), defaults=(500, 600, 10), unit='nm')
         if dialog.exec() and not self.aquiring:
             self.wavelens = np.linspace(*dialog.get_values())
             self.start_aquisition(self.save_laser_data, self.take_laser_sweep, self.take_sequence_avg)
@@ -320,7 +320,7 @@ class MainController(QObject):
     
 
     def z_sweep(self):
-        dialog = SweepDialog(self, title='Z Sweep Data', limits=(-10, 10, -10, 10), defaults=(-1, 1, 10), unit='micron')
+        dialog = SweepDialog(title='Z Sweep Data', limits=(-10, 10, -10, 10), defaults=(-1, 1, 10), unit='micron')
         if dialog.exec() and not self.aquiring:
             self.z_positions = np.linspace(*dialog.get_values())*10/1.4
             self.start_aquisition(self.save_z_data, self.take_z_sweep, self.take_sequence_avg)
