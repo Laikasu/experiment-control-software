@@ -2,10 +2,11 @@ import os
 if os.name == 'nt':
     import NKTP_DLL as nkt
 
-from PySide6.QtCore import QObject, Signal
-from PySide6.QtWidgets import QMessageBox
+import logging
 
-class Laser(QObject):
+from PySide6.QtCore import QObject, Signal
+
+class LaserController(QObject):
     changedState = Signal(bool)
     
     def __init__(self, parent):
@@ -18,7 +19,7 @@ class Laser(QObject):
         if os.name == 'nt':
             self.grab(warning=False)
         else:
-            QMessageBox.warning(self.parent(), 'Error', 'Failed opening laser: Linux/Mac are not supself.ported due to the NKT laser only providing .dll')
+            logging.warning('Warning', 'Failed opening laser: Linux/Mac are not supself.ported due to the NKT laser only providing .dll')
         
     
     def set_emission(self, emit: bool):
@@ -56,7 +57,7 @@ class Laser(QObject):
         else:
             self.open = False
             if warning:
-                QMessageBox.warning(self.parent(),'Error', 'Failed opening laser: port busy.')
+                logging.error('Error', 'Failed opening laser: Port is busy.')
         self.changedState.emit(self.open)
     
     def release(self):

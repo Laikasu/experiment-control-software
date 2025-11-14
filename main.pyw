@@ -6,13 +6,14 @@ import sys
 import traceback
 
 from main_window import MainWindow
+from controllers import MainController
 
 def excepthook(exc_type, exc_value, exc_traceback):
     # Print to console
     traceback.print_exception(exc_type, exc_value, exc_traceback)
     # Optional: show a message box
     msg = QMessageBox()
-    msg.setIcon(QMessageBox.Critical)
+    msg.setIcon(QMessageBox.Icon.Critical)
     msg.setWindowTitle("Error")
     msg.setText(f"{exc_type.__name__}: {exc_value}")
     msg.exec()
@@ -26,7 +27,8 @@ def main():
     app.setApplicationDisplayName("Experiment Control Software")
     app.setStyle("fusion")
 
-    w = MainWindow()
+    controller = MainController()
+    w = MainWindow(controller)
     w.show()
 
     app.exec()

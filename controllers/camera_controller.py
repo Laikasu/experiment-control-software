@@ -1,15 +1,16 @@
 import imagingcontrol4 as ic4
 
-from PySide6.QtCore import QStandardPaths, QDir, QTimer, QEvent, QFileInfo, Qt, Signal, QThread, QObject
-from PySide6.QtGui import QAction, QKeySequence, QCloseEvent, QIcon, QImage
-from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QFileDialog, QToolBar
+from PySide6.QtCore import QStandardPaths, QTimer, QEvent, QFileInfo, Qt, Signal, QObject
+from PySide6.QtWidgets import QApplication
 
 import numpy as np
+
+import logging
 
 DEVICE_LOST_EVENT = QEvent.Type(QEvent.Type.User + 1)
     
 
-class Camera(QObject):
+class CameraController(QObject):
     new_frame = Signal(np.ndarray)
     state_changed = Signal()
     opened = Signal(int, int, int, int, int, int)
@@ -20,7 +21,7 @@ class Camera(QObject):
         super().__init__(parent)
         self.grabber = ic4.Grabber()
         self.grabber.event_add_device_lost(lambda g: QApplication.postEvent(self, QEvent(DEVICE_LOST_EVENT)))
-        self.device_property_map = None
+        self.destroyed.connect(self.cleanup)
         self.property_dialog = None
         self.trigger_mode = False
 
@@ -50,17 +51,17 @@ class Camera(QObject):
 
 
     def reload_device(self):
-        appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
+        appdata_directory = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
         self.device_file = appdata_directory + '/device.json'
         if QFileInfo.exists(self.device_file):
             try:
                 self.grabber.device_open_from_state_file(self.device_file)
                 self.onDeviceOpened()
             except ic4.IC4Exception as e:
-                QMessageBox.information(self.parent(), '', f'Loading last used device failed: {e}', QMessageBox.StandardButton.Ok)
+                logging.warning(f'Loading last used device failed: {e}')
     
 
-    def closeEvent(self, ev: QCloseEvent):
+    def cleanup(self):
         self.update_statistics_timer.stop()
 
         if self.grabber.is_device_valid:
@@ -81,8 +82,6 @@ class Camera(QObject):
             self.grabber.device_close()
         except:
             pass
-
-        self.device_property_map = None
 
     
     def onSelectDevice(self, parent):
@@ -125,7 +124,7 @@ class Camera(QObject):
             pass
     
     def onDeviceLost(self):
-        QMessageBox.warning(self.parent(), '', f'The video capture device is lost!', QMessageBox.StandardButton.Ok)
+        logging.warning(f'The video capture device is lost!')
 
         # stop video
 
@@ -148,9 +147,12 @@ class Camera(QObject):
         self.device_property_map.set_value(ic4.PropId.GAIN, 0)
         self.device_property_map.set_value(ic4.PropId.EXPOSURE_AUTO, 'Off')
         self.device_property_map.set_value(ic4.PropId.PIXEL_FORMAT, 'Mono 16')
+
+        self.roi_width = self.device_property_map.get_value_int(ic4.PropId.WIDTH)
+        self.roi_height = self.device_property_map.get_value_int(ic4.PropId.HEIGHT)
         self.opened.emit(
-            self.device_property_map.get_value_int(ic4.PropId.WIDTH),
-            self.device_property_map.get_value_int(ic4.PropId.HEIGHT),
+            self.roi_width,
+            self.roi_height,
             self.device_property_map.get_value_int(ic4.PropId.WIDTH_MAX),
             self.device_property_map.get_value_int(ic4.PropId.HEIGHT_MAX),
             self.device_property_map.get_value_int(ic4.PropId.OFFSET_X),
@@ -181,6 +183,25 @@ class Camera(QObject):
                     self.grabber.stream_setup(self.sink)
 
         except ic4.IC4Exception as e:
-            QMessageBox.critical(self.parent(), '', f'{e}', QMessageBox.StandardButton.Ok)
+            logging.error(f'{e}')
 
         self.state_changed.emit()
+    
+    def get_exposure_auto(self):
+        return self.device_property_map.get_value_bool(ic4.PropId.EXPOSURE_AUTO)
+
+    def get_exposure_time(self):
+        return int(self.device_property_map.get_value_float(ic4.PropId.EXPOSURE_TIME))
+    
+    def get_fps(self):
+        return self.device_property_map.get_value_float(ic4.PropId.ACQUISITION_FRAME_RATE)
+    
+    def set_roi(self, roi):
+        self.startStopStream()
+        self.roi_width = int(roi.width())
+        self.roi_height = int(roi.height())
+        self.device_property_map.set_value(ic4.PropId.WIDTH, int(roi.width()))
+        self.device_property_map.set_value(ic4.PropId.HEIGHT, int(roi.height()))
+        self.device_property_map.set_value(ic4.PropId.OFFSET_X, int(roi.left()))
+        self.device_property_map.set_value(ic4.PropId.OFFSET_Y, int(roi.top()))
+        self.startStopStream()

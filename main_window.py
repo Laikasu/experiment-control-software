@@ -5,28 +5,15 @@ from PySide6.QtWidgets import QMainWindow, QMessageBox, QLabel, QApplication, QF
 import os
 import logging
 import numpy as np
-import tifffile as tiff
-import cv2
-import time
-import yaml
-from pathlib import Path
 
-# Stage
-from pymmcore_plus import CMMCorePlus
+
+
 # Camera
 import imagingcontrol4 as ic4
-# Laser
-from nktlaser import Laser
-# Pump
-from lspone import Pump
 
 from widgets import VideoView, SweepDialog, PropertiesDialog, LaserWindow
+from controllers.main_controller import MainController
 import processing as pc
-from camera import Camera
-
-from functools import partial
-
-
 
 
 class PersistentWorkerThread(QThread):
@@ -37,16 +24,16 @@ class PersistentWorkerThread(QThread):
 
 class MainWindow(QMainWindow):
     new_processed_frame = Signal(np.ndarray)
-    def __init__(self):
+    def __init__(self, controller: MainController):
+        super().__init__(self)
         logging.basicConfig(level=logging.DEBUG)
         self.app_dir = QDir(os.path.dirname(os.path.abspath(__file__)))
-        QMainWindow.__init__(self)
         self.setWindowIcon(QIcon(self.app_dir.filePath("images/tis.ico")))
 
         # Setup storage
-        self.appdata_directory = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
-        picture_directory = QStandardPaths.writableLocation(QStandardPaths.PicturesLocation)
-        video_directory = QStandardPaths.writableLocation(QStandardPaths.MoviesLocation)
+        self.appdata_directory = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
+        picture_directory = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.PicturesLocation)
+        video_directory = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.MoviesLocation)
         QDir(self.appdata_directory).mkpath('.')
 
         self.data_directory = picture_directory + '/Data'
@@ -55,119 +42,41 @@ class MainWindow(QMainWindow):
         QDir(self.backgrounds_directory).mkpath('.')
         self.save_videos_directory = video_directory
 
-        # Load settings
-        self.settings = QSettings('Casper', 'Monitor')
-        # if not self.settings.contains('mmdir'):
-        #     mmdir = QFileDialog(self,
-        #                         fileMode=QFileDialog.FileMode.ExistingFile,
-        #                         acceptMode=QFileDialog.AcceptMode.AcceptOpen,
-        #                         filter='TIFF (*.tif)')
-        #     self.settings.setValue('mmdir', )
-        # mm_dir = self.settings.value('mmdir', type=str)
+        self.controller = controller
 
 
-        if self.settings.contains('magnification') and self.settings.contains('pxsize'):
-            self.magnification = self.settings.value('magnification', type=int)
-            self.pxsize = self.settings.value('pxsize', type=float)
-        else:
-            self.magnification = 60 # Default
-            self.pxsize = 3.45
-            self.set_setup_parameters()
-
-        # Setup devices
-        mm_dir = r'C:\Users\20224813\AppData\Local\pymmcore-plus\pymmcore-plus\mm'
-        self.setup_micromanager(None)
-
+        # UI elements
         self.laser_window = LaserWindow(self)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.laser_window)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.laser_window)
         self.laser_window.hide()
 
-        self.laser = Laser(self)
-        self.laser.changedState.connect(self.update_controls)
-        self.laser.changedState.connect(self.update_laser_control)
+        self.video_view = VideoView(self)
 
-        self.update_laser_control()
-        self.laser_window.centerChanged.connect(self.laser.set_wavelen)
-        self.laser_window.bandwidthChanged.connect(self.laser.set_bandwith)
 
-        # Attempt to setup pump
-        self.pump = Pump(self)
-        self.amf = self.pump.amf
-        self.pump.changedState.connect(self.update_controls)
-        
-        
-        self.grid = True
-        self.shot_count = 10 # Shoot 10 images to average over
-        self.got_image_mutex = QMutex()
-        self.got_image = QWaitCondition()
-
-        self.aquiring = False
-        self.aquiring_mutex = QMutex()
-
-        self.trigger_mode = False
+        # Routes
+        self.controller.update_controls.connect(self.update_controls)
+        self.laser_window.centerChanged.connect(self.controller.laser.set_wavelen)
+        self.laser_window.bandwidthChanged.connect(self.controller.laser.set_bandwith)
 
         self.temp_video_file = None
 
+        self.controller.camera.new_frame.connect(self.update_display)
+        self.controller.camera.state_changed.connect(self.update_controls)
+        self.controller.camera.opened.connect(self.video_view.set_size)
+        self.video_view.roi_set.connect(self.controller.camera.set_roi)
         
-
         
-
-        self.video_view = VideoView(self)
-        self.video_view.roi_set.connect(self.update_roi)
-        self.move_stage_worker = PersistentWorkerThread(self.move_stage)
+        self.move_stage_worker = PersistentWorkerThread(self.controller.stage.move_stage)
         self.video_view.move_stage.connect(self.move_stage_worker.func)
 
-        self.camera = Camera(self)
-        self.camera.new_frame.connect(self.update_display)
-        self.camera.state_changed.connect(self.update_controls)
-        self.camera.opened.connect(self.video_view.set_size)
-        self.camera.opened.connect(self.init_roi)
-
-        fps = 10
-        self.camera_timer = QTimer(self, interval=1000//fps)
-        self.camera_timer.timeout.connect(self.trigger)
-        
-
-        self.background: np.ndarray = None
+        self.background: np.ndarray | None = None
         self.subtract_background = False
+        self.controller.update_background.connect(self.set_background)
 
         self.createUI()
         self.update_controls()
-        self.camera.reload_device()
+        self.controller.camera.reload_device()
             
-    
-
-    def setup_micromanager(self, mm_dir=None):
-        application_path = self.app_dir
-        self.xy_stage = None
-        self.z_stage = None
-        
-        self.mmc = CMMCorePlus.instance()
-
-        # Load micromanager
-        try:
-            if mm_dir is not None:
-                self.mmc.setDeviceAdapterSearchPaths([mm_dir])
-        except Exception as e:
-            QMessageBox.warning(self, 'Error', f'failed to load mm: \n{e}')
-            return None
-        
-        # Load config
-        try:
-            self.mmc.loadSystemConfiguration(application_path.filePath('MMConfig.cfg'))
-        except Exception as e:
-            QMessageBox.warning(self, 'Error', f'failed to load mm config: \n{e}')
-            return None
-        else:
-            self.z_stage = self.mmc.getFocusDevice()
-            self.xy_stage = self.mmc.getXYStageDevice()
-            logging.debug('Connected to micromanager')
-    
-    def update_laser_control(self):
-        if self.laser.open:
-            bandwidth = self.laser.bandwith
-            wavelen = self.laser.wavelen
-            self.laser_window.set_values(wavelen, bandwidth)
             
     def createUI(self):
         self.resize(1024, 768)
@@ -176,117 +85,109 @@ class MainWindow(QMainWindow):
         # Actions #
         #=========#
         application_path = os.path.abspath(os.path.dirname(__file__)) + os.sep
+
+
+        self.acts = []
+        def add_action(action):
+            self.acts.append(action)
+            return action
         
-        self.device_select_act = QAction(QIcon(application_path + 'images/camera.png'), '&Select', self)
+        self.device_select_act = add_action(QAction(QIcon(application_path + 'images/camera.png'), '&Select', self))
         self.device_select_act.setStatusTip('Select a video capture device')
-        self.device_select_act.setShortcut(QKeySequence.Open)
-        self.device_select_act.triggered.connect(partial(self.camera.onSelectDevice, self))
+        self.device_select_act.setShortcut(QKeySequence.StandardKey.Open)
+        self.device_select_act.triggered.connect(self.controller.camera.onSelectDevice)
 
-        self.device_properties_act = QAction(QIcon(application_path + 'images/imgset.png'), '&Camera Properties', self)
+        self.device_properties_act = add_action(QAction(QIcon(application_path + 'images/imgset.png'), '&Camera Properties', self))
         self.device_properties_act.setStatusTip('Show device property dialog')
-        self.device_properties_act.triggered.connect(partial(self.camera.onDeviceProperties, self))
+        self.device_properties_act.triggered.connect(self.controller.camera.onDeviceProperties)
 
-        self.device_driver_properties_act = QAction('&Driver Properties', self)
+
+        self.device_driver_properties_act = add_action(QAction('&Driver Properties', self))
         self.device_driver_properties_act.setStatusTip('Show device driver property dialog')
-        self.device_driver_properties_act.triggered.connect(partial(self.camera.onDeviceDriverProperties, self))
+        self.device_driver_properties_act.triggered.connect(self.controller.camera.onDeviceDriverProperties)
 
-        self.trigger_mode_act = QAction(QIcon(application_path + 'images/triggermode.png'), "&Trigger Mode", self)
-        self.trigger_mode_act.setStatusTip("Enable and disable trigger mode")
-        self.trigger_mode_act.setCheckable(True)
-        self.trigger_mode_act.toggled.connect(self.toggle_trigger_mode)
-
-        self.pulses_act = QAction("&Pulse count", self)
-        self.pulses_act.setStatusTip("Set the amount of pulses in each trigger")
-        self.pulses_act.triggered.connect(self.set_pulses)
-
-        self.start_live_act = QAction(QIcon(application_path + 'images/livestream.png'), '&Live Stream', self)
+        self.start_live_act = add_action(QAction(QIcon(application_path + 'images/livestream.png'), '&Live Stream', self))
         self.start_live_act.setStatusTip('Start and stop the live stream')
         self.start_live_act.setCheckable(True)
-        self.start_live_act.triggered.connect(self.camera.startStopStream)
+        self.start_live_act.triggered.connect(self.controller.camera.startStopStream)
 
-        self.close_device_act = QAction('Close', self)
+        self.close_device_act = add_action(QAction('Close', self))
         self.close_device_act.setStatusTip('Close the currently opened device')
-        self.close_device_act.setShortcuts(QKeySequence.Close)
-        self.close_device_act.triggered.connect(self.camera.onCloseDevice) 
+        self.close_device_act.setShortcuts(QKeySequence.StandardKey.Close)
+        self.close_device_act.triggered.connect(self.controller.camera.onCloseDevice) 
 
-        self.laser_parameters_act = QAction(QIcon(application_path + 'images/wavelen.png'), '&Laser Properties', self)
+        self.laser_parameters_act = add_action(QAction(QIcon(application_path + 'images/wavelen.png'), '&Laser Properties', self))
         self.laser_parameters_act.setStatusTip('Show laser properties dialog')
         self.laser_parameters_act.triggered.connect(lambda: self.laser_window.setVisible(not self.laser_window.isVisible()))
 
-        self.set_roi_act = QAction('Select ROI', self)
+        self.set_roi_act = add_action(QAction('Select ROI', self))
         self.set_roi_act.setStatusTip('Draw a rectangle to set ROI')
         self.set_roi_act.setCheckable(True)
         self.set_roi_act.triggered.connect(lambda: self.toggle_mode('roi'))
 
-        self.move_act = QAction('Move', self)
+        self.move_act = add_action(QAction('Move', self))
         self.move_act.setStatusTip('Move the sample by dragging the view')
         self.move_act.setCheckable(True)
         self.move_act.triggered.connect(lambda: self.toggle_mode('move'))
 
-        self.subtract_background_act = QAction('Background Subtraction', self)
+        self.subtract_background_act = add_action(QAction('Background Subtraction', self))
         self.subtract_background_act.setStatusTip('Toggle background subtraction')
         self.subtract_background_act.setCheckable(True)
-        self.subtract_background_act.triggered.connect(self.toggle_background_subtraction)
+        self.subtract_background_act.toggled.connect(self.set_background_subtraction)
 
-        self.snap_background_act = QAction('&Snap Background', self)
+        self.snap_background_act = add_action(QAction('&Snap Background', self))
         self.snap_background_act.setStatusTip('Snap background image')
-        self.snap_background_act.triggered.connect(self.snap_background)
+        self.snap_background_act.triggered.connect(self.controller.snap_background)
 
-        self.snap_raw_photo_act = QAction('Snap Raw Photo', self)
+        self.snap_raw_photo_act = add_action(QAction('Snap Raw Photo', self))
         self.snap_raw_photo_act.setStatusTip('Snap a single raw photo')
-        self.snap_raw_photo_act.triggered.connect(self.snap_photo)
+        self.snap_raw_photo_act.triggered.connect(self.controller.snap_photo)
 
-        self.snap_processed_photo_act = QAction('Snap Photo')
+        self.snap_processed_photo_act = add_action(QAction('Snap Photo'))
         self.snap_processed_photo_act.setStatusTip('Snap a single background subtracted photo')
-        self.snap_processed_photo_act.triggered.connect(self.snap_processed_photo)
+        self.snap_processed_photo_act.triggered.connect(self.controller.snap_processed_photo)
 
-        self.laser_sweep_act = QAction('Sweep Laser')
-        self.laser_sweep_act.triggered.connect(self.laser_sweep)
+        self.laser_sweep_act = add_action(QAction('Sweep Laser'))
+        self.laser_sweep_act.triggered.connect(self.controller.laser_sweep)
 
-        self.z_sweep_act = QAction('Defocus Sweep')
+        self.z_sweep_act = add_action(QAction('Defocus Sweep'))
         self.z_sweep_act.setStatusTip('Perform a focus sweep')
-        self.z_sweep_act.triggered.connect(self.z_sweep)
+        self.z_sweep_act.triggered.connect(self.controller.z_sweep)
 
-        self.z_wavelen_sweep_act = QAction('Defocus wavelen Sweep')
+        self.z_wavelen_sweep_act = add_action(QAction('Defocus wavelen Sweep'))
         self.z_wavelen_sweep_act.setStatusTip('Perform a focus sweep')
-        self.z_wavelen_sweep_act.triggered.connect(self.laser_defocus_sweep)
+        self.z_wavelen_sweep_act.triggered.connect(self.controller.laser_defocus_sweep)
 
-        self.media_act = QAction('Vary Media')
+        self.media_act = add_action(QAction('Vary Media'))
         self.media_act.setStatusTip('Perform a temporal variation of media')
-        self.media_act.triggered.connect(self.media_sweep)
+        self.media_act.triggered.connect(self.controller.media_sweep)
 
-        self.video_act = QAction(QIcon(application_path + 'images/recordstart.png'), '&Capture Video', self)
+        self.video_act = add_action(QAction(QIcon(application_path + 'images/recordstart.png'), '&Capture Video', self))
         self.video_act.setToolTip('Capture Video')
         self.video_act.setCheckable(True)
-        self.video_act.toggled.connect(self.toggle_video)
+        self.video_act.toggled.connect(self.controller.toggle_video)
 
-        self.toggle_grid_act = QAction('Grid')
-        self.toggle_grid_act.setStatusTip('Toggles whether to use a grid for background')
-        self.toggle_grid_act.setCheckable(True)
-        self.toggle_grid_act.toggled.connect(lambda value: setattr(self, 'grid', value))
-
-
-        self.grab_release_laser_act = QAction('Open Laser')
+        self.grab_release_laser_act = add_action(QAction('Open Laser'))
         self.grab_release_laser_act.setCheckable(True)
-        self.grab_release_laser_act.triggered.connect(self.laser.toggle_laser)
+        self.grab_release_laser_act.triggered.connect(self.controller.laser.toggle_laser)
 
-        self.grab_release_pump_act = QAction('Open Pump')
+        self.grab_release_pump_act = add_action(QAction('Open Pump'))
         self.grab_release_pump_act.setCheckable(True)
-        self.grab_release_pump_act.triggered.connect(self.pump.toggle)
+        self.grab_release_pump_act.triggered.connect(self.controller.pump.toggle)
 
-        self.change_setup_act = QAction('Setup Properties')
-        self.change_setup_act.triggered.connect(self.set_setup_parameters)
+        self.change_setup_act = add_action(QAction('Setup Properties'))
+        self.change_setup_act.triggered.connect(self.controller.set_setup_parameters)
 
-        self.cancel_aquisition_act = QAction('Cancel aquisition')
-        self.cancel_aquisition_act.triggered.connect(self.finish_aquisition)
+        self.cancel_aquisition_act = add_action(QAction('Cancel aquisition'))
+        self.cancel_aquisition_act.triggered.connect(self.controller.finish_aquisition)
 
-        self.clean_pump_act = QAction('Clean pump')
-        self.clean_pump_act.triggered.connect(self.clean_pump)
+        self.clean_pump_act = add_action(QAction('Clean pump'))
+        self.clean_pump_act.triggered.connect(self.controller.pump.clean_pump)
 
 
 
-        exit_act = QAction('E&xit', self)
-        exit_act.setShortcut(QKeySequence.Quit)
+        exit_act = add_action(QAction('E&xit', self))
+        exit_act.setShortcut(QKeySequence.StandardKey.Quit)
         exit_act.setStatusTip('Exit program')
         exit_act.triggered.connect(self.close)
 
@@ -302,8 +203,6 @@ class MainWindow(QMainWindow):
         device_menu.addAction(self.device_properties_act)
         device_menu.addAction(self.laser_parameters_act)
         device_menu.addAction(self.device_driver_properties_act)
-        device_menu.addAction(self.trigger_mode_act)
-        device_menu.addAction(self.pulses_act)
         device_menu.addAction(self.set_roi_act)
         device_menu.addAction(self.move_act)
         device_menu.addAction(self.start_live_act)
@@ -324,7 +223,6 @@ class MainWindow(QMainWindow):
         capture_menu.addSeparator()
         capture_menu.addAction(self.z_sweep_act)
         capture_menu.addAction(self.z_wavelen_sweep_act)
-        capture_menu.addAction(self.toggle_grid_act)
         capture_menu.addAction(self.media_act)
         capture_menu.addAction(self.cancel_aquisition_act)
         
@@ -336,7 +234,7 @@ class MainWindow(QMainWindow):
         #=========#
 
         toolbar = QToolBar(self)
-        self.addToolBar(Qt.TopToolBarArea, toolbar)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
         toolbar.addAction(self.device_select_act)
         toolbar.addAction(self.device_properties_act)
         toolbar.addAction(self.laser_parameters_act)
@@ -369,593 +267,100 @@ class MainWindow(QMainWindow):
         self.aquisition_label = QLabel('', self.statusBar())
         self.statusBar().addPermanentWidget(self.aquisition_label)
         self.statistics_label = QLabel('', self.statusBar())
-        self.camera.statistics_update.connect(lambda s1, s2: (self.statistics_label.setText(s1), self.statistics_label.setToolTip(s2)))
+        self.controller.camera.statistics_update.connect(lambda s1, s2: (self.statistics_label.setText(s1), self.statistics_label.setToolTip(s2)))
         self.statusBar().addPermanentWidget(self.statistics_label)
         self.statusBar().addPermanentWidget(QLabel('  '))
         self.camera_label = QLabel(self.statusBar())
         self.statusBar().addPermanentWidget(self.camera_label)
-        self.camera.label_update.connect(self.camera_label.setText)
+        self.controller.camera.label_update.connect(self.camera_label.setText)
     
     # def test(self, button):
     #         print(self.laser.open)
 
-    def set_setup_parameters(self):
-        dialog = PropertiesDialog(self)
-        if dialog.exec():
-            self.magnification, self.pxsize = dialog.get_values()
-            self.settings.setValue('magnification', self.magnification)
-            self.settings.setValue('pxsize', self.pxsize)
+    
+
+    def update_laser_control(self):
+        if self.controller.laser.open:
+            bandwidth = self.controller.laser.bandwith
+            wavelen = self.controller.laser.wavelen
+            self.laser_window.set_values(wavelen, bandwidth)
         
 
     def update_controls(self):
-        self.laser_window.setVisible(self.laser.open and not self.aquiring)
-        self.laser_parameters_act.setEnabled(self.laser.open and not self.aquiring)
-        grabber = self.camera.grabber
-        if not grabber.is_device_open:
+        # Depending booleans
+        aquiring = self.controller.aquiring
+        pump_open = self.controller.pump.open
+        laser_open = self.controller.laser.open
+        streaming = self.controller.camera.grabber.is_streaming
+        valid_camera  = self.controller.camera.grabber.is_device_valid
+        camera_open = self.controller.camera.grabber.is_device_open
+
+        self.laser_window.setVisible(self.controller.laser.open)
+        self.laser_parameters_act.setEnabled(self.controller.laser.open)
+
+        if not camera_open:
             self.statistics_label.clear()
         
-        xy_stage_connected = not not self.xy_stage
-        xy_needed = self.grid
-        xy_okay = (xy_needed and xy_stage_connected) or not xy_needed
+        xy_stage_connected = not not self.controller.stage.xy_stage
+        z_stage_connected = not not self.controller.stage.z_stage
 
-        z_stage_connected = not not self.z_stage
 
-        self.device_properties_act.setEnabled(grabber.is_device_valid and not self.aquiring)
-        self.device_driver_properties_act.setEnabled(grabber.is_device_valid and not self.aquiring)
-        self.start_live_act.setEnabled(grabber.is_device_valid and not self.aquiring)
-        self.start_live_act.setChecked(grabber.is_streaming)
-        self.video_act.setEnabled(grabber.is_streaming and not self.aquiring)
-        self.close_device_act.setEnabled(grabber.is_device_open and not self.aquiring)
-        self.snap_background_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_okay)
-        self.snap_processed_photo_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_okay)
-        self.snap_raw_photo_act.setEnabled(grabber.is_streaming and not self.aquiring)
-        self.z_sweep_act.setEnabled(grabber.is_streaming and not self.aquiring and z_stage_connected and xy_okay and self.laser.open)
-        self.set_roi_act.setEnabled(grabber.is_device_valid and not self.video_view.background.rect().isEmpty() and not self.aquiring)
-        self.move_act.setEnabled(grabber.is_streaming and not self.aquiring and xy_stage_connected)
+        # Non-aquisition
+        if not aquiring:
+            for act in self.acts:
+                act.setEnabled(True)
+
+        
+        # Devices
+        self.grab_release_laser_act.setChecked(laser_open)
+        self.laser_parameters_act.setEnabled(laser_open)
+
+        self.grab_release_pump_act.setChecked(pump_open)
+
+        self.device_properties_act.setEnabled(valid_camera)
+        self.device_driver_properties_act.setEnabled(valid_camera)
+        self.start_live_act.setEnabled(valid_camera)
+        self.start_live_act.setChecked(streaming)
+        self.video_act.setEnabled(streaming)
+        self.close_device_act.setEnabled(camera_open)
+
+        # Captures
+        self.snap_background_act.setEnabled(streaming and xy_stage_connected)
+        self.snap_processed_photo_act.setEnabled(streaming and xy_stage_connected)
+        self.snap_raw_photo_act.setEnabled(streaming)
+
+        self.laser_sweep_act.setEnabled(streaming and laser_open)
+        self.media_act.setEnabled(streaming and pump_open)
+        self.z_sweep_act.setEnabled(streaming and z_stage_connected and xy_stage_connected)
+        self.z_wavelen_sweep_act.setEnabled(streaming and z_stage_connected and xy_stage_connected and laser_open)
+
+        # Video view functions
+        self.set_roi_act.setEnabled(valid_camera and not self.video_view.background.rect().isEmpty())
+        self.move_act.setEnabled(streaming and xy_stage_connected)
         self.move_act.setChecked(self.video_view.mode == 'move')
         self.set_roi_act.setChecked(self.video_view.mode == 'roi')
+
         self.subtract_background_act.setEnabled(self.background is not None)
-        self.laser_sweep_act.setEnabled(self.laser.open and not self.aquiring and grabber.is_streaming)
-        self.media_act.setEnabled(self.pump.open and not self.aquiring and grabber.is_streaming)
-        self.grab_release_laser_act.setChecked(self.laser.open)
-        self.grab_release_pump_act.setChecked(self.pump.open)
-        self.cancel_aquisition_act.setEnabled(self.aquiring and self.laser.open)
-
-    def closeEvent(self, ev: QCloseEvent):
-        self.camera_timer.stop()
-        self.camera.closeEvent(ev)
-        if self.amf:
-            self.amf.disconnect()
-    
-    def toggle_trigger_mode(self, mode):
-        if not mode:
-            self.camera_timer.stop()
-        self.camera.set_trigger_mode(mode)
-        self.laser.set_trigger_mode(mode)
-        self.trigger_mode = mode
-        if mode:
-            self.camera_timer.start()
-    
-    def trigger(self):
-        if self.trigger_mode:
-            self.camera.trigger()
-            self.laser.trigger()
+        self.subtract_background_act.setChecked(self.subtract_background)
         
-    def set_pulses(self):
-        dialog = QInputDialog(self)
-        dialog.setInputMode(QInputDialog.InputMode.IntInput)
-        dialog.setLabelText("Enter the pulse count")
-        dialog.setIntRange(1, 1000)
-        dialog.setIntValue(self.laser.pulses)  # default value
-        dialog.setWindowTitle("Pulse Count")
-        if dialog.exec():
-            self.laser.pulses = dialog.intValue()
-
-    
-    # =====================================================
-    # =================   Video   =========================
-    # =====================================================
-    
-    def toggle_video(self, start: bool):
-        if start:
-            self.start_video()
-        else:
-            self.stop_video()
-
-    def start_video(self):
-        self.photos = []
-        self.new_processed_frame.connect(self.write_frame)
-
-    def write_frame(self, frame: np.ndarray):
-        self.photos.append(frame)
-    
-    def stop_video(self):
-        self.new_processed_frame.disconnect(self.write_frame)
-
-        dialog = QFileDialog(self, 'Save Video')
-        dialog.setNameFilters(('Multi Page TIF (*.tif)', 'AVI Video (*.avi)'))
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setDirectory(self.save_videos_directory)
-        if dialog.exec():
-
-            filepath = dialog.selectedFiles()[0]
-            filepath = os.path.splitext(filepath)[0]
-            nameFilter = dialog.selectedNameFilter()
-            if '.tif' in nameFilter:
-                photos = np.array(self.photos)
-                if photos.dtype == np.uint16:
-                    photos = (photos/256).astype(np.uint8)
-                
-                tiff.imwrite(filepath + '.tif', np.array(self.photos))
-
-            elif '.avi' in nameFilter:
-                fps = int(self.camera.device_property_map.get_value_float(ic4.PropId.ACQUISITION_FRAME_RATE))
-                self.writer = cv2.VideoWriter(filepath + '.avi', cv2.VideoWriter_fourcc(*'XVID'), fps, (self.roi_width, self.roi_height), False)
-
-                for photo in self.photos:
-                    # Image writer only support uint8
-                    if photo.dtype == np.uint16:
-                        self.writer.write((photo/256).astype(np.uint8))
-                    elif (photo.dtype ==np.uint8):
-                        self.writer.write(photo)
-
-                
-                self.writer.release()
-        self.save_videos_directory = dialog.directory()
-
-    
-    #==============================================#
-    # Functions to take raw images and aquisitions #
-    #==============================================#
-    
-    # Snap and save one raw image
-    def snap_photo(self):
-        self.camera.new_frame.connect(self.save_image, Qt.ConnectionType.SingleShotConnection)
-    
-
-    def save_image(self, image: np.ndarray):
-        dialog = QFileDialog(self, 'Save Photo')
-        dialog.setNameFilter('TIFF (*.tif)')
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setDirectory(self.data_directory)
-
-        if dialog.exec():
-            filepath = dialog.selectedFiles()[0]
-            filepath = os.path.splitext(filepath)[0]
-            tiff.imwrite(filepath + '.tif', image)
-        self.data_directory = dialog.directory()
-
-
-
-    # =====================================================
-    # ===============   Aquisitions   =====================
-    # =====================================================
+        # Aquisition
+        if aquiring:
+            self.video_view.mode = 'navigation'
+            self.subtract_background = False
+            self.subtract_background_act.setChecked(False)
+            
+            for act in self.acts:
+                act.setEnabled(False)
         
-    class AquisitionWorkerThread(QThread):
-        done = Signal()
-        def __init__(self, parent, func, *args):
-            super().__init__(parent)
-            self.args = args
-            self.photos = []
-            self.func = func
-            self.parent = parent
-            if parent.trigger_mode:
-                parent.camera_timer.stop()
-            
-            parent.cancel_aquisition_act.triggered.connect(self.terminate)
-
-        def run(self):
-            self.func(*self.args)
-            self.done.emit()
-    
-    def start_aquisition(self, finish, *actions):
-        actions = lambda: self.action(*actions)
-        # Clear photo buffer
-        self.photos = []
-        self.aquisition_worker = self.AquisitionWorkerThread(self, actions)
-        self.aquisition_worker.done.connect(finish)
-        self.aquisition_worker.done.connect(self.finish_aquisition)
-
-        self.aquiring_mutex.lock()
-        self.aquiring = True
-        self.aquiring_mutex.unlock()
-        self.update_controls()
-
-        self.aquisition_worker.start()
-
-    def finish_aquisition(self):
-        self.aquiring_mutex.lock()
-        self.aquiring = False
-        self.aquiring_mutex.unlock()
-        self.update_controls()
-
-        self.aquisition_label.setText('')
-        if self.trigger_mode:
-            self.camera_timer.start()
-    
-
-    # =====================================================
-    # =================   Actions   =======================
-    # =====================================================
-
-    def action(*actions):
-        """Define action chains"""
-        if len(actions) == 1:
-            # Final action
-            return actions[0]()
-        else:
-            return lambda: actions[0](*actions[1:])
-
-    def take_z_sweep(self, *actions):
-        """Move to different defocus then perform next action"""
-        z_zero = self.mmc.getZPosition()
-        for i, z in enumerate(self.z_positions*10/1.4):
-            # Set position
-            pos = z_zero + z
-            self.z_position = i
-            self.mmc.setZPosition(pos)
-            self.mmc.waitForDevice(self.z_stage)
-            time.sleep(2)
-            # Next action
-            self.action(*actions)
-
-        # Reset
-        self.mmc.setZPosition(z_zero)
-
-    def take_laser_sweep(self, *actions):
-        """Move to different wavelen then perform next action"""
-        init_wavelen = self.laser.wavelen()
-        self.laser.set_wavelen(self.wavelens[0])
-        time.sleep(5)
-        self.laser_data_raw = []
-        for i, wavelen in enumerate(self.wavelens):
-            self.laser.set_wavelen(wavelen)
-            time.sleep(0.5)
-            # Take next action
-            self.action(*actions)
-        
-        # Reset laser
-        self.laser.set_wavelen(init_wavelen)
-    
-    def take_media_sweep(self, *actions):
-        """Move to different wavelen then perform next action"""
-        water = 10
-        flowcell = 7
-        waste = 1
-        
-        volume = 200
-
-        input = self.media
-        output = flowcell
-
-        
-        # Take a picture once a second, storing it in media_data_raw
-        self.media_data_raw = []
-
-        self.amf.pullAndWait()
-        for medium in input:
-            self.amf.valveMove(medium)
-            self.aquisition_label.setText(f'Aquiring Data: Taking up medium {medium}')
-            self.amf.setFlowRate(1500,2)
-            self.amf.pumpPickupVolume(volume)
-            self.amf.setFlowRate(400,2)
-            self.amf.valveMove(output)
-
-            # Protect sample
-            assert self.amf.getFlowRate() < 500
-
-            self.aquisition_label.setText(f'Aquiring Data: Dispensing medium {medium}')
-
-            # Dispense and only capture during dispensing
-            self.amf.pumpDispenseVolume(volume,block=False)
-            
-            # Aquisition
-
-            # While pumping
-            # timer = QElapsedTimer()
-            # timer.start()
-            # while self.amf.getPumpStatus():
-            #     if timer.hasExpired(2000):
-            #         self.take_media_shot()
-            #         timer.restart()
-            self.amf.pullAndWait()
-            time.sleep(2)
-            self.action(*actions)
-            time.sleep(2)
-    
-
-    # Image taking
-
-    def take_single(self):
-        """Take a single photo and store it"""
-        self.camera.new_frame.connect(self.store_image, Qt.ConnectionType.SingleShotConnection)
-        self.trigger()
-        self.got_image_mutex.lock()
-        # Retry
-        while not self.got_image.wait(self.got_image_mutex, 1000):
-            self.camera.new_frame.connect(self.store_image, Qt.ConnectionType.SingleShotConnection)
-            self.trigger()
-        self.got_image_mutex.unlock()
-    
-    def take_single_avg(self):
-        """Take a single averaged photo and store it"""
-        for i in range(self.shot_count):
-            self.take_single()
-
-    def take_sequence(self):
-        """Take a grid photo and store it"""
-        distance = 4
-        positions = np.array([[1,0], [1,1], [0,1]])*distance
-        anchor = np.array(self.mmc.getXYPosition(self.xy_stage))
-
-        self.take_single()
-            
-        for i, position in enumerate(positions):
-            pos = position + anchor
-            self.mmc.setXYPosition(pos[0], pos[1])
-            self.mmc.waitForDevice(self.xy_stage)
-            time.sleep(0.2)
-            self.take_single()
-        
-        # Return to base
-        self.mmc.setXYPosition(anchor[0], anchor[1])
-
-    def take_sequence_avg(self):
-        """Take a grid photo and store it"""
-        distance = 4
-        positions = np.array([[1,0], [1,1], [0,1]])*distance
-        anchor = np.array(self.mmc.getXYPosition(self.xy_stage))
-
-        self.take_single_avg()
-            
-        for i, position in enumerate(positions):
-            pos = position + anchor
-            self.mmc.setXYPosition(pos[0], pos[1])
-            self.mmc.waitForDevice(self.xy_stage)
-            time.sleep(0.2)
-            self.take_single()
-        
-        # Return to base
-        self.mmc.setXYPosition(anchor[0], anchor[1])
-
+        self.cancel_aquisition_act.setEnabled(aquiring)
     
     
-    def store_image(self, image: np.ndarray):
-        self.photos.append(image)
-        self.got_image.wakeAll()
+
+    def set_background_subtraction(self, value: bool):
+        self.subtract_background = value
     
-
-    # =====================================================
-    # =======   Complete measurement protocols   ==========
-    # =====================================================
-
-    def snap_background(self):
-        self.start_aquisition(self.set_background, self.take_sequence)
-    
-    def set_background(self):
-        self.background = pc.common_background(self.photos)
-        self.update_controls()
-    
-    # Background subtracted photos
-
-    def snap_processed_photo(self):
-        self.start_aquisition(self.save_processed_photo, self.take_sequence_avg)
-
-    def save_processed_photo(self):
-        dialog = QFileDialog(self, 'Save Photo')
-        dialog.setNameFilter('TIFF (*.tif)')
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setDirectory(self.data_directory)
-        if dialog.exec():
-            filepath = dialog.selectedFiles()[0]
-            filepath = os.path.splitext(filepath)[0]
-            
-            background = pc.common_background(self.photos[-4:])
-            data = np.mean(self.photos[:-3], axis=0)
-            diff = pc.background_subtracted(data, background)
-            
-            # also contains raw data
-            tiff.imwrite(filepath + '.tif', pc.float_to_mono(diff))
-            np.save(os.path.splitext(filepath)[0] + '.npy', self.photos)
-
-            metadata = self.generate_metadata()
-            with open(filepath+'.yaml', 'w') as file:
-                yaml.dump(metadata, file)
-        self.data_directory = dialog.directory()
-
-
-    def laser_sweep(self):
-        bandwidth = self.laser.bandwith
-        band_radius = self.laser.bandwith/2
-        dialog = SweepDialog(self, title='Laser Sweep Data', limits=(390+band_radius, 850-bandwidth, 390+bandwidth, 850-band_radius), defaults=(500, 600, 10), unit='nm')
-        if dialog.exec() and not self.aquiring:
-            self.wavelens = np.linspace(*dialog.get_values())
-            self.start_aquisition(self.save_laser_data, self.take_laser_sweep, self.take_sequence_avg)
-    
-    def save_laser_data(self):
-        dialog = QFileDialog(self, 'Save Wavelength Sweep')
-        dialog.setNameFilter('TIFF image sequence (*.tif)')
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setDirectory(self.data_directory)
-        if dialog.exec():
-            filepath = dialog.selectedFiles()[0]
-            filepath = os.path.splitext(filepath)[0]
-            
-            data = np.squeeze(self.photos)
-            shape = np.shape(data)
-            images = data.reshape(len(self.wavelens), self.shot_count+3, *shape[1:])
-            np.save(filepath + '.npy', images)
-            tiff.imwrite(filepath + '.tif', images[:,0])
-
-            metadata = self.generate_metadata()
-            metadata['Laser.wavelength [nm]'] = {
-                'Start': int(self.wavelens[0]),
-                'Stop': int(self.wavelens[-1]),
-                'Number': len(self.wavelens)}
-            with open(filepath+'.yaml', 'w') as file:
-                yaml.dump(metadata, file)
-        self.data_directory = dialog.directory()
-        self.aquisition_label.setText('')
-        self.statusBar().showMessage('Done!')
-    
-
-    def z_sweep(self):
-        dialog = SweepDialog(self, title='Z Sweep Data', limits=(-10, 10, -10, 10), defaults=(-1, 1, 10), unit='micron')
-        if dialog.exec() and not self.aquiring:
-            self.z_positions = np.linspace(*dialog.get_values())*10/1.4
-            self.start_aquisition(self.save_z_data, self.take_z_sweep, self.take_sequence_avg)
-    
-    def save_z_data(self):
-        dialog = QFileDialog(self, 'Save Z Sweep')
-        dialog.setNameFilter('TIFF image sequence (*.tif)')
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setDirectory(self.data_directory)
-        if dialog.exec():
-            filepath = dialog.selectedFiles()[0]
-            filepath = os.path.splitext(filepath)[0]
-
-            data = np.squeeze(self.photos)
-            shape = np.shape(data)
-            images = data.reshape(len(self.z_positions), self.shot_count+3, *shape[1:])
-            np.save(filepath + '.npy', images)
-            tiff.imwrite(filepath + '.tif', images[:,0])
-
-            metadata = self.generate_metadata()
-            metadata['Setup.defocus [um]'] = {
-                'Start': float(self.z_positions[0]),
-                'Stop': float(self.z_positions[-1]),
-                'Number': len(self.z_positions)}
-            
-            with open(filepath +'.yaml', 'w') as file:
-                yaml.dump(metadata, file)
-        self.data_directory = dialog.directory()
-        self.aquisition_label.setText('')
-        self.statusBar().showMessage('Done!')
-    
-
-    def laser_defocus_sweep(self):
-        self.wavelens = np.linspace(520, 522, 2)
-        self.z_positions = np.linspace(-0.1, 0.1, 5)
-        self.start_aquisition(self.save_laser_defocus_data,
-                              self.take_z_sweep, self.take_laser_sweep, self.take_sequence_avg)
-    
-    def save_laser_defocus_data(self):
-        dialog = QFileDialog(self, 'Save Wavelength defocus Sweep')
-        dialog.setNameFilter('raw data (*.npy)')
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setDirectory(self.data_directory)
-        if dialog.exec():
-            filepath = dialog.selectedFiles()[0]
-            filepath = os.path.splitext(filepath)[0]
-            
-            data = np.squeeze(self.photos)
-            shape = np.shape(data)
-            images = data.reshape(len(self.z_positions), len(self.wavelens), self.shot_count+3, *shape[1:])
-            np.save(filepath + '.npy', images)
-
-            metadata = self.generate_metadata()
-            metadata['Laser.wavelength [nm]'] = {
-                'Start': int(self.wavelens[0]),
-                'Stop': int(self.wavelens[-1]),
-                'Number': len(self.wavelens)}
-            metadata['Setup.defocus [um]'] = {
-                'Start': float(self.z_positions[0]),
-                'Stop': float(self.z_positions[-1]),
-                'Number': len(self.z_positions)}
-            
-            with open(filepath+'.yaml', 'w') as file:
-                yaml.dump(metadata, file)
-        self.data_directory = dialog.directory()
-        self.aquisition_label.setText('')
-        self.statusBar().showMessage('Done!')
-    
-    # Media sweep
-    def media_sweep(self):
-        water = 10
-        flowcell = 7
-        waste = 1
-        self.media = [water, 2, water, 3, water, 4, water, 5]
-        self.start_aquisition(self.save_media_data, self.take_media_sweep, self.take_sequence_avg)
-    
-    def save_media_data(self):
-        dialog = QFileDialog(self, 'Save Media Data')
-        dialog.setNameFilter('TIFF image sequence (*.tif)')
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setDirectory(self.data_directory)
-        if dialog.exec():
-            filepath = dialog.selectedFiles()[0]
-            filepath = os.path.splitext(filepath)[0]
-
-            data = np.squeeze(self.photos)
-            shape = np.shape(data)
-            images = data.reshape(len(self.media), self.shot_count+3, *shape[1:])
-            np.save(filepath + '.npy', images)
-            tiff.imwrite(filepath + '.tif', images[:,0])
-
-            metadata = self.generate_metadata()
-            
-            with open(filepath +'.yaml', 'w') as file:
-                yaml.dump(metadata, file)
-        self.data_directory = dialog.directory()
-        self.aquisition_label.setText('')
-        self.statusBar().showMessage('Done!')
-
-    
-    def init_roi(self, width, height, max_width, max_height, offset_x, offset_y):
-        self.roi_width = width
-        self.roi_height = height
-    
-    def update_roi(self, roi):
-        # Set ROI in camera
-        self.camera.startStopStream()
-        self.camera.device_property_map.set_value(ic4.PropId.WIDTH, int(roi.width()))
-        self.camera.device_property_map.set_value(ic4.PropId.HEIGHT, int(roi.height()))
-        self.camera.device_property_map.set_value(ic4.PropId.OFFSET_X, int(roi.left()))
-        self.camera.device_property_map.set_value(ic4.PropId.OFFSET_Y, int(roi.top()))
-        self.camera.startStopStream()
-        self.roi_width = roi.width()
-        self.roi_height = roi.height()
-        self.subtract_background = False
-        self.background = None
-
-        # Go out of roi mode in UI
-        self.update_controls()
-    
-    def clean_pump(self):
-        water = 10
-        flowcell = 8
-        waste = 1
-        clean = [2, 3, 4, 5]
-        volume = 200
-
-        outputs = clean
-
-        self.amf.pullAndWait()
-
-        self.amf.setFlowRate(1500,2)
-        for i in range(5):
-            for output in outputs:
-                self.amf.valveMove(water)
-                self.amf.pumpPickupVolume(volume)
-                self.amf.valveMove(output)
-                self.amf.pumpDispenseVolume(volume)
-                self.amf.pumpPickupVolume(volume)
-                self.amf.valveMove(waste)
-                self.amf.pumpDispenseVolume(volume)
-    
-    def move_stage(self, displacement: np.ndarray):
-        displacement_micron = 3.45*displacement/40
-        self.mmc.setRelativeXYPosition(-displacement_micron[1], -displacement_micron[0])
-
-    def toggle_background_subtraction(self):
-        self.subtract_background = not self.subtract_background
+    def set_background(self, background):
+        self.background = background
     
     def toggle_mode(self, mode):
         if self.video_view.mode == mode:
@@ -973,27 +378,3 @@ class MainWindow(QMainWindow):
             frame = pc.float_to_mono(diff)
         self.new_processed_frame.emit(frame)
         self.video_view.update_image(frame)
-
-    
-    def generate_metadata(self) -> dict:
-        exposure_auto = self.camera.device_property_map.get_value_bool(ic4.PropId.EXPOSURE_AUTO)
-        if exposure_auto:
-            exposure_time = 'auto'
-        else:
-            exposure_time = int(self.camera.device_property_map.get_value_float(ic4.PropId.EXPOSURE_TIME))
-        
-        if self.trigger_mode:
-            frequency = "triggered"
-        else:
-            frequency = self.laser.get_frequency()
-        return({
-            'Camera.fps': self.camera.device_property_map.get_value_float(ic4.PropId.ACQUISITION_FRAME_RATE),
-            'Camera.exposure_time [us]': exposure_time,
-            'Camera.pixel_size [um]': self.pxsize,
-            'Camera.grid': self.grid,
-            'Camera.averaging': self.shot_count,
-            'Setup.magnification': self.magnification,
-            'Laser.wavelength [nm]': self.laser.wavelen,
-            'Laser.bandwith [nm]': self.laser.bandwith,
-            'Laser.frequency [kHz]': frequency
-        })
