@@ -86,7 +86,7 @@ class MainController(QObject):
     # =====================================================
 
 
-    def take_z_sweep(self, *actions):
+    def take_z_sweep(self, actions):
         """Move to different defocus then perform next action"""
         z_zero = self.stage.get_z_position()
         for i, z in enumerate(self.z_positions*10/1.4):
@@ -96,15 +96,15 @@ class MainController(QObject):
             self.stage.set_z_position(z)
             time.sleep(2)
             # Next action
-            self.action(*actions)
+            self.action(actions)
 
         # Reset
         self.stage.set_z_position(z_zero)
 
 
-    def take_laser_sweep(self, *actions):
+    def take_laser_sweep(self, actions):
         """Move to different wavelen then perform next action"""
-        init_wavelen = self.laser.wavelen()
+        init_wavelen = self.laser.wavelen
         self.laser.set_wavelen(self.wavelens[0])
         time.sleep(5)
         self.laser_data_raw = []
@@ -112,13 +112,13 @@ class MainController(QObject):
             self.laser.set_wavelen(wavelen)
             time.sleep(0.5)
             # Take next action
-            self.action(*actions)
+            self.action(actions)
         
         # Reset laser
         self.laser.set_wavelen(init_wavelen)
     
 
-    def take_media_sweep(self, *actions):
+    def take_media_sweep(self, actions):
         """Move to medium and then perform next action"""
 
         input = self.media
@@ -131,7 +131,7 @@ class MainController(QObject):
             self.pump.pickup(medium)
             self.pump.flow()
             self.pump.wait_till_ready()
-            self.action(*actions)
+            self.action(actions)
             time.sleep(2)
     
 
@@ -197,17 +197,17 @@ class MainController(QObject):
     # ===============   Aquisitions   =====================
     # =====================================================
     
-    def action(self, *actions):
+    def action(self, actions):
         """Define action chains"""
         if len(actions) == 1:
             # Final action
             return actions[0]()
         else:
-            return lambda: actions[0](*actions[1:])
+            return lambda: actions[0](actions[1:])
     
 
     def start_aquisition(self, finish, *actions):
-        actionsfunc = lambda: self.action(*actions)
+        actionsfunc = lambda: self.action(actions)
         # Clear photo buffer
         self.photos = []
         self.aquisition_worker = AquisitionWorkerThread(self, actionsfunc)
