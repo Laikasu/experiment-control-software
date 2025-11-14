@@ -74,7 +74,7 @@ class MainController(QObject):
             self.set_setup_parameters()
 
     def set_setup_parameters(self):
-        dialog = PropertiesDialog(self)
+        dialog = PropertiesDialog(self.magnification, self.pxsize)
         if dialog.exec():
             self.magnification, self.pxsize = dialog.get_values()
             self.settings.setValue('magnification', self.magnification)

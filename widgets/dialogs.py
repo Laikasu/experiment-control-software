@@ -5,20 +5,20 @@ from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
 import numpy as np
 
 class PropertiesDialog(QDialog):
-    def __init__(self, parent):
-        super().__init__(parent=parent)
+    def __init__(self, magnification, pxsize):
+        super().__init__()
         self.setWindowTitle("Properties")
 
         self.magnification = QSpinBox(minimum=1, maximum=80, singleStep=10)
-        self.magnification.setValue(parent.magnification)
+        self.magnification.setValue(magnification)
         self.pxsize = QDoubleSpinBox(minimum=0, maximum=100, singleStep=10, decimals=2, suffix=f" micron")
-        self.pxsize.setValue(parent.pxsize)
+        self.pxsize.setValue(pxsize)
         layout = QFormLayout()
         layout.addRow("Magnification", self.magnification)
         layout.addRow("Pixel size", self.pxsize)
 
 
-        self.button_box = QDialogButtonBox( QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        self.button_box = QDialogButtonBox( QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
 
@@ -31,8 +31,8 @@ class PropertiesDialog(QDialog):
         return self.magnification.value(), self.pxsize.value()
 
 class SweepDialog(QDialog):
-    def __init__(self, parent, title: str, limits, defaults, unit):
-        super().__init__(parent=parent)
+    def __init__(self, title: str, limits, defaults, unit):
+        super().__init__()
         self.setWindowTitle(title)
 
         self.start = QDoubleSpinBox(minimum=limits[0], maximum=limits[1], singleStep=10, decimals=1, suffix=f" {unit}")
@@ -47,7 +47,7 @@ class SweepDialog(QDialog):
         layout.addRow("Number", self.number)
 
 
-        self.button_box = QDialogButtonBox( QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        self.button_box = QDialogButtonBox( QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
 

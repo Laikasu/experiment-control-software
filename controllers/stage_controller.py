@@ -12,7 +12,7 @@ class StageController():
         self.mmc = CMMCorePlus.instance()
         # Load config
         try:
-            self.mmc.loadSystemConfiguration(Path(__file__) / 'MMConfig.cfg')
+            self.mmc.loadSystemConfiguration(Path(__file__).parent / 'MMConfig.cfg')
         except Exception as e:
             logging.warning(f'failed to load mm config: \n{e}')
         else:

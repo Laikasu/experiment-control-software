@@ -6,7 +6,7 @@ import sys
 import traceback
 
 from main_window import MainWindow
-from controllers import MainController
+from main_controller import MainController
 
 def excepthook(exc_type, exc_value, exc_traceback):
     # Print to console

@@ -6,13 +6,8 @@ import os
 import logging
 import numpy as np
 
-
-
-# Camera
-import imagingcontrol4 as ic4
-
-from widgets import VideoView, SweepDialog, PropertiesDialog, LaserWindow
-from controllers.main_controller import MainController
+from widgets import VideoView, LaserWindow
+from main_controller import MainController
 import processing as pc
 
 
@@ -25,7 +20,7 @@ class PersistentWorkerThread(QThread):
 class MainWindow(QMainWindow):
     new_processed_frame = Signal(np.ndarray)
     def __init__(self, controller: MainController):
-        super().__init__(self)
+        super().__init__()
         logging.basicConfig(level=logging.DEBUG)
         self.app_dir = QDir(os.path.dirname(os.path.abspath(__file__)))
         self.setWindowIcon(QIcon(self.app_dir.filePath("images/tis.ico")))
@@ -284,7 +279,7 @@ class MainWindow(QMainWindow):
             bandwidth = self.controller.laser.bandwith
             wavelen = self.controller.laser.wavelen
             self.laser_window.set_values(wavelen, bandwidth)
-        
+        update_cont
 
     def update_controls(self):
         # Depending booleans
@@ -301,8 +296,8 @@ class MainWindow(QMainWindow):
         if not camera_open:
             self.statistics_label.clear()
         
-        xy_stage_connected = not not self.controller.stage.xy_stage
-        z_stage_connected = not not self.controller.stage.z_stage
+        xy_stage_connected = self.controller.stage.open and not not self.controller.stage.xy_stage
+        z_stage_connected = self.controller.stage.open and not not self.controller.stage.z_stage
 
 
         # Non-aquisition
@@ -316,6 +311,7 @@ class MainWindow(QMainWindow):
         self.laser_parameters_act.setEnabled(laser_open)
 
         self.grab_release_pump_act.setChecked(pump_open)
+        self.clean_pump_act.setEnabled(pump_open)
 
         self.device_properties_act.setEnabled(valid_camera)
         self.device_driver_properties_act.setEnabled(valid_camera)

@@ -11,6 +11,7 @@ class PumpController(QObject):
         super().__init__(parent=parent)
         self.setup()
         self.destroyed.connect(self.cleanup)
+        self.amf = None
         self.water = 10
         self.flowcell = 7
         self.waste = 1
@@ -33,25 +34,27 @@ class PumpController(QObject):
             return None
 
     def toggle(self):
-        if self.open:
-            self.amf.disconnect()
-            self.open = False
-        else:
-            if self.amf is not None:
+        if self.amf is not None:
+            #  Reconnect
+            if not self.open:
                 self.amf.connect()
                 if not self.amf.getHomeStatus():
                     self.amf.home(False)
                 self.open = True
             else:
-                self.setup()
+                self.amf.disconnect()
+                self.open = False
+        else:
+            self.setup()
+            
         self.changedState.emit(self.open)
     
     def cleanup(self):
-        if self.open:
+        if self.open and self.amf is not None:
             self.amf.disconnect()
     
     def pickup(self, port):
-        if self.open:
+        if self.open and self.amf is not None:
             if port != self.waste and port != self.flowcell:
                 self.amf.valveMove(port)
                 self.amf.setFlowRate(1500,2)
@@ -60,18 +63,18 @@ class PumpController(QObject):
                 logging.error('Cannot pickup waste or flowcell!')
     
     def flow(self):
-        if self.open:
+        if self.open and self.amf is not None:
             self.amf.setFlowRate(400,2)
             self.amf.valveMove(self.flowcell)
             self.amf.pumpDispenseVolume(self.volume,block=False)
     
     def wait_till_ready(self):
-        if self.open:
+        if self.open and self.amf is not None:
             self.amf.pullAndWait()
     
 
     def clean_pump(self, ports):
-        if self.open:
+        if self.open and self.amf is not None:
             volume = 500
             if self.waste not in ports and self.flowcell not in ports:
                 self.amf.pullAndWait()

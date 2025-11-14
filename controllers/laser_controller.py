@@ -19,7 +19,7 @@ class LaserController(QObject):
         if os.name == 'nt':
             self.grab(warning=False)
         else:
-            logging.warning('Warning', 'Failed opening laser: Linux/Mac are not supself.ported due to the NKT laser only providing .dll')
+            logging.warning('Failed opening laser: Linux/Mac are not supported due to the NKT laser only providing .dll')
         
     
     def set_emission(self, emit: bool):
