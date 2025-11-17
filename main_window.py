@@ -133,6 +133,10 @@ class MainWindow(QMainWindow):
         self.pump_act.setStatusTip('Show pump control')
         self.pump_act.triggered.connect(lambda: self.pump_window.setVisible(not self.pump_window.isVisible()))
 
+        self.show_acquisition_act = add_action(QAction('Acquisition', self))
+        self.show_acquisition_act.setStatusTip('Show acquisition window')
+        self.show_acquisition_act.triggered.connect(lambda: self.sweep_window.setVisible(not self.sweep_window.isVisible()))
+
         self.set_roi_act = add_action(QAction('Select ROI', self))
         self.set_roi_act.setStatusTip('Draw a rectangle to set ROI')
         self.set_roi_act.setCheckable(True)
@@ -228,6 +232,7 @@ class MainWindow(QMainWindow):
         device_menu.addAction(self.clean_pump_act)
 
         view_menu = self.menuBar().addMenu('&View')
+        view_menu.addAction(self.show_acquisition_act)
         view_menu.addAction(self.snap_background_act)
         view_menu.addAction(self.subtract_background_act)
 

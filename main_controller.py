@@ -1,4 +1,4 @@
-from PySide6.QtCore import QObject, Signal, QThread, QMutex, QWaitCondition, Qt, QSettings
+from PySide6.QtCore import QObject, Signal, QThread, QMutex, QWaitCondition, Qt, QSettings, QStandardPaths
 from PySide6.QtWidgets import QFileDialog
 
 import time
@@ -8,6 +8,10 @@ import os
 import tifffile as tiff
 import cv2
 import yaml
+
+from pathlib import Path
+from datetime import datetime
+import shutil
 
 import processing as pc
 
@@ -123,17 +127,24 @@ class MainController(QObject):
 
         input = self.media
 
-        # Take a picture once a second, storing it in media_data_raw
-        self.media_data_raw = []
-
         self.pump.wait_till_ready()
         for medium in input:
             self.pump.pickup(medium)
             self.pump.flow()
             self.pump.wait_till_ready()
             self.action(actions)
+            self.store_medium_data()
             time.sleep(2)
-    
+
+    def store_medium_data(self):
+        data = np.squeeze(self.photos)
+        shape = np.shape(data)
+        images = data.reshape(*self.shape, self.shot_count+3, *shape[1:])
+        folder = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.TempLocation)
+        filepath = Path(folder) / datetime.now().strftime("%Y%m%d_%H%M%S.npy")
+        np.save(filepath, images)
+        self.photos = []
+        self.temp_files.append(filepath)
 
     # Image taking
 
@@ -235,15 +246,21 @@ class MainController(QObject):
     def acquire(self, params: dict):
         """Accepts and parses requests"""
         self.shape = []
+        self.temp_files = []
+        self.media = []
+        self.z_positions = []
+        self.wavelens = []
         actions = []
         if 'media' in params.keys():
-            self.shape.append(len(params['media']))
+            self.media = params['media']
             actions.append(self.take_media_sweep)
         if 'defocus' in params.keys():
             self.shape.append(params['defocus'][2])
+            self.z_positions = np.linspace(*params['defocus'])
             actions.append(self.take_z_sweep)
         if 'wavelen' in params.keys():
             self.shape.append(params['wavelen'][2])
+            self.wavelens = np.linspace(*params['wavelen'])
             actions.append(self.take_laser_sweep)
         
         actions.append(self.take_sequence_avg)
@@ -261,18 +278,19 @@ class MainController(QObject):
             filepath = dialog.selectedFiles()[0]
             filepath = os.path.splitext(filepath)[0]
             
-            data = np.squeeze(self.photos)
-            shape = np.shape(data)
-            images = data.reshape(*self.shape, self.shot_count+3, *shape[1:])
-            np.save(filepath + '.npy', images)
-            if len(self.shape) == 1:
-                tiff.imwrite(filepath + '.tif', images[:,0])
+            if len(self.temp_files) > 0:
+                # Saved in files
+                for i, file in enumerate(self.temp_files):
+                    shutil.move(file, f'{filepath}_{i}.npy')
+            else:
+                data = np.squeeze(self.photos)
+                shape = np.shape(data)
+                images = data.reshape(*self.shape, self.shot_count+3, *shape[1:])
+                np.save(filepath + '.npy', images)
+                if len(self.shape) == 1:
+                    tiff.imwrite(filepath + '.tif', images[:,0])
 
             metadata = self.generate_metadata()
-            metadata['Laser.wavelength [nm]'] = {
-                'Start': int(self.wavelens[0]),
-                'Stop': int(self.wavelens[-1]),
-                'Number': len(self.wavelens)}
             with open(filepath+'.yaml', 'w') as file:
                 yaml.dump(metadata, file)
         self.data_directory = dialog.directory()
@@ -352,10 +370,6 @@ class MainController(QObject):
             tiff.imwrite(filepath + '.tif', images[:,0])
 
             metadata = self.generate_metadata()
-            metadata['Laser.wavelength [nm]'] = {
-                'Start': int(self.wavelens[0]),
-                'Stop': int(self.wavelens[-1]),
-                'Number': len(self.wavelens)}
             with open(filepath+'.yaml', 'w') as file:
                 yaml.dump(metadata, file)
         self.data_directory = dialog.directory()
@@ -382,10 +396,6 @@ class MainController(QObject):
             tiff.imwrite(filepath + '.tif', images[:,0])
 
             metadata = self.generate_metadata()
-            metadata['Setup.defocus [um]'] = {
-                'Start': float(self.z_positions[0]),
-                'Stop': float(self.z_positions[-1]),
-                'Number': len(self.z_positions)}
             
             with open(filepath +'.yaml', 'w') as file:
                 yaml.dump(metadata, file)
@@ -414,14 +424,6 @@ class MainController(QObject):
             np.save(filepath + '.npy', images)
 
             metadata = self.generate_metadata()
-            metadata['Laser.wavelength [nm]'] = {
-                'Start': int(self.wavelens[0]),
-                'Stop': int(self.wavelens[-1]),
-                'Number': len(self.wavelens)}
-            metadata['Setup.defocus [um]'] = {
-                'Start': float(self.z_positions[0]),
-                'Stop': float(self.z_positions[-1]),
-                'Number': len(self.z_positions)}
             
             with open(filepath+'.yaml', 'w') as file:
                 yaml.dump(metadata, file)
@@ -468,16 +470,34 @@ class MainController(QObject):
         else:
             exposure_time = self.camera.get_exposure_time
         
-        return({
+        if len(self.wavelens) > 0:
+            wavelen = {
+                'Start': int(self.wavelens[0]),
+                'Stop': int(self.wavelens[-1]),
+                'Number': len(self.wavelens)}
+        else:
+            wavelen = self.laser.wavelen
+        
+        if len(self.z_positions) > 0:
+            z_position = {
+                'Start': float(self.z_positions[0]),
+                'Stop': float(self.z_positions[-1]),
+                'Number': len(self.z_positions)}
+        else:
+            z_position = 0
+            
+        
+        return {
             'Camera.fps': self.camera.get_fps(),
             'Camera.exposure_time [us]': exposure_time,
             'Camera.pixel_size [um]': self.pxsize,
             'Camera.averaging': self.shot_count,
             'Setup.magnification': self.magnification,
-            'Laser.wavelength [nm]': self.laser.wavelen,
+            'Setup.defocus [um]': z_position,
+            'Laser.wavelength [nm]': wavelen,
             'Laser.bandwith [nm]': self.laser.bandwith,
             'Laser.frequency [kHz]': self.laser.get_frequency()
-        })
+        }
     
     # =====================================================
     # =================   Video   =========================
