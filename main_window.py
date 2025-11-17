@@ -6,7 +6,7 @@ import os
 import logging
 import numpy as np
 
-from widgets import VideoView, LaserWindow
+from widgets import VideoView, LaserWindow, SweepWindow, SweepDialog, PumpWindow
 from main_controller import MainController
 import processing as pc
 
@@ -45,15 +45,29 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.laser_window)
         self.laser_window.hide()
 
+        self.sweep_window = SweepWindow(self)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.sweep_window)
+        self.sweep_window.start_acquisition.connect(self.controller.acquire)
+        self.sweep_window.hide()
+
+        self.pump_window = PumpWindow(self)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.pump_window)
+        self.pump_window.hide()
+
         self.video_view = VideoView(self)
 
 
         # Routes
         self.controller.update_controls.connect(self.update_controls)
+
         self.laser_window.centerChanged.connect(self.controller.laser.set_wavelen)
         self.laser_window.bandwidthChanged.connect(self.controller.laser.set_bandwith)
+        self.laser_window.powerChanged.connect(self.controller.laser.set_power)
+        self.controller.laser.changedState.connect(self.update_laser_control)
 
-        self.temp_video_file = None
+        self.pump_window.start_pickup.connect(self.controller.pump.pickup)
+        self.pump_window.start_dispense.connect(self.controller.pump.dispense)
+        self.pump_window.start_clean.connect(self.controller.pump.clean_pump)
 
         self.controller.camera.new_frame.connect(self.update_display)
         self.controller.camera.state_changed.connect(self.update_controls)
@@ -112,8 +126,12 @@ class MainWindow(QMainWindow):
         self.close_device_act.triggered.connect(self.controller.camera.onCloseDevice) 
 
         self.laser_parameters_act = add_action(QAction(QIcon(application_path + 'images/wavelen.png'), '&Laser Properties', self))
-        self.laser_parameters_act.setStatusTip('Show laser properties dialog')
+        self.laser_parameters_act.setStatusTip('Show laser properties window')
         self.laser_parameters_act.triggered.connect(lambda: self.laser_window.setVisible(not self.laser_window.isVisible()))
+
+        self.pump_act = add_action(QAction('Pump Control', self))
+        self.pump_act.setStatusTip('Show pump control')
+        self.pump_act.triggered.connect(lambda: self.pump_window.setVisible(not self.pump_window.isVisible()))
 
         self.set_roi_act = add_action(QAction('Select ROI', self))
         self.set_roi_act.setStatusTip('Draw a rectangle to set ROI')
@@ -145,9 +163,9 @@ class MainWindow(QMainWindow):
         self.laser_sweep_act = add_action(QAction('Sweep Laser'))
         self.laser_sweep_act.triggered.connect(self.controller.laser_sweep)
 
-        self.z_sweep_act = add_action(QAction('Defocus Sweep'))
-        self.z_sweep_act.setStatusTip('Perform a focus sweep')
-        self.z_sweep_act.triggered.connect(self.controller.z_sweep)
+        self.defocus_sweep_act = add_action(QAction('Defocus Sweep'))
+        self.defocus_sweep_act.setStatusTip('Perform a focus sweep')
+        self.defocus_sweep_act.triggered.connect(self.defocus_sweep)
 
         self.z_wavelen_sweep_act = add_action(QAction('Defocus wavelen Sweep'))
         self.z_wavelen_sweep_act.setStatusTip('Perform a focus sweep')
@@ -173,8 +191,8 @@ class MainWindow(QMainWindow):
         self.change_setup_act = add_action(QAction('Setup Properties'))
         self.change_setup_act.triggered.connect(self.controller.set_setup_parameters)
 
-        self.cancel_aquisition_act = add_action(QAction('Cancel aquisition'))
-        self.cancel_aquisition_act.triggered.connect(self.controller.finish_aquisition)
+        self.cancel_acquisition_act = add_action(QAction('Cancel acquisition'))
+        self.cancel_acquisition_act.triggered.connect(self.controller.finish_acquisition)
 
         self.clean_pump_act = add_action(QAction('Clean pump'))
         self.clean_pump_act.triggered.connect(self.controller.pump.clean_pump)
@@ -196,8 +214,9 @@ class MainWindow(QMainWindow):
         device_menu = self.menuBar().addMenu('&Device')
         device_menu.addAction(self.device_select_act)
         device_menu.addAction(self.device_properties_act)
-        device_menu.addAction(self.laser_parameters_act)
         device_menu.addAction(self.device_driver_properties_act)
+        device_menu.addAction(self.laser_parameters_act)
+        device_menu.addAction(self.pump_act)
         device_menu.addAction(self.set_roi_act)
         device_menu.addAction(self.move_act)
         device_menu.addAction(self.start_live_act)
@@ -216,10 +235,10 @@ class MainWindow(QMainWindow):
         capture_menu.addAction(self.snap_raw_photo_act)
         capture_menu.addAction(self.snap_processed_photo_act)
         capture_menu.addSeparator()
-        capture_menu.addAction(self.z_sweep_act)
+        capture_menu.addAction(self.defocus_sweep_act)
         capture_menu.addAction(self.z_wavelen_sweep_act)
         capture_menu.addAction(self.media_act)
-        capture_menu.addAction(self.cancel_aquisition_act)
+        capture_menu.addAction(self.cancel_acquisition_act)
         
 
 
@@ -245,7 +264,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.snap_processed_photo_act)
         toolbar.addSeparator()
         toolbar.addAction(self.laser_sweep_act)
-        toolbar.addAction(self.z_sweep_act)
+        toolbar.addAction(self.defocus_sweep_act)
         toolbar.addAction(self.media_act)
 
         
@@ -259,8 +278,8 @@ class MainWindow(QMainWindow):
         
 
         self.statusBar().showMessage('Ready')
-        self.aquisition_label = QLabel('', self.statusBar())
-        self.statusBar().addPermanentWidget(self.aquisition_label)
+        self.acquisition_label = QLabel('', self.statusBar())
+        self.statusBar().addPermanentWidget(self.acquisition_label)
         self.statistics_label = QLabel('', self.statusBar())
         self.controller.camera.statistics_update.connect(lambda s1, s2: (self.statistics_label.setText(s1), self.statistics_label.setToolTip(s2)))
         self.statusBar().addPermanentWidget(self.statistics_label)
@@ -278,12 +297,12 @@ class MainWindow(QMainWindow):
         if self.controller.laser.open:
             bandwidth = self.controller.laser.bandwith
             wavelen = self.controller.laser.wavelen
-            self.laser_window.set_values(wavelen, bandwidth)
-        update_cont
+            power = self.controller.laser.get_power()
+            self.laser_window.set_values(wavelen, bandwidth, power)
 
     def update_controls(self):
         # Depending booleans
-        aquiring = self.controller.aquiring
+        acquiring = self.controller.acquiring
         pump_open = self.controller.pump.open
         laser_open = self.controller.laser.open
         streaming = self.controller.camera.grabber.is_streaming
@@ -300,8 +319,8 @@ class MainWindow(QMainWindow):
         z_stage_connected = self.controller.stage.open and not not self.controller.stage.z_stage
 
 
-        # Non-aquisition
-        if not aquiring:
+        # Non-acquisition
+        if not acquiring:
             for act in self.acts:
                 act.setEnabled(True)
 
@@ -309,6 +328,11 @@ class MainWindow(QMainWindow):
         # Devices
         self.grab_release_laser_act.setChecked(laser_open)
         self.laser_parameters_act.setEnabled(laser_open)
+        if not laser_open:
+            self.laser_window.setVisible(False)
+        self.pump_act.setEnabled(laser_open)
+        if not pump_open:
+            self.pump_window.setVisible(False)
 
         self.grab_release_pump_act.setChecked(pump_open)
         self.clean_pump_act.setEnabled(pump_open)
@@ -327,7 +351,7 @@ class MainWindow(QMainWindow):
 
         self.laser_sweep_act.setEnabled(streaming and laser_open)
         self.media_act.setEnabled(streaming and pump_open)
-        self.z_sweep_act.setEnabled(streaming and z_stage_connected and xy_stage_connected)
+        self.defocus_sweep_act.setEnabled(streaming and z_stage_connected and xy_stage_connected)
         self.z_wavelen_sweep_act.setEnabled(streaming and z_stage_connected and xy_stage_connected and laser_open)
 
         # Video view functions
@@ -339,8 +363,8 @@ class MainWindow(QMainWindow):
         self.subtract_background_act.setEnabled(self.background is not None)
         self.subtract_background_act.setChecked(self.subtract_background)
         
-        # Aquisition
-        if aquiring:
+        # Acquisition
+        if acquiring:
             self.video_view.mode = 'navigation'
             self.subtract_background = False
             self.subtract_background_act.setChecked(False)
@@ -348,7 +372,7 @@ class MainWindow(QMainWindow):
             for act in self.acts:
                 act.setEnabled(False)
         
-        self.cancel_aquisition_act.setEnabled(aquiring)
+        self.cancel_acquisition_act.setEnabled(acquiring)
     
     
 
@@ -374,3 +398,14 @@ class MainWindow(QMainWindow):
             frame = pc.float_to_mono(diff)
         self.new_processed_frame.emit(frame)
         self.video_view.update_image(frame)
+    
+    def laser_sweep(self):
+        band_radius = self.controller.laser.bandwith/2
+        dialog = SweepDialog(title='Laser Sweep Data', limits=(390+band_radius, 850-band_radius, 390+band_radius, 850-band_radius), defaults=(500, 600, 10), unit='nm')
+        if dialog.exec():
+            self.controller.laser_sweep(*dialog.get_values())
+    
+    def defocus_sweep(self):
+        dialog = SweepDialog(title='Z Sweep Data', limits=(-10, 10, -10, 10), defaults=(-1, 1, 10), unit='micron')
+        if dialog.exec():
+            self.controller.z_sweep(*dialog.get_values())

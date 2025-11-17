@@ -53,14 +53,26 @@ class PumpController(QObject):
         if self.open and self.amf is not None:
             self.amf.disconnect()
     
-    def pickup(self, port):
+    def pickup(self, port, volume=200):
         if self.open and self.amf is not None:
             if port != self.waste and port != self.flowcell:
                 self.amf.valveMove(port)
                 self.amf.setFlowRate(1500,2)
-                self.amf.pumpPickupVolume(self.volume)
+                self.amf.pumpPickupVolume(volume)
             else:
                 logging.error('Cannot pickup waste or flowcell!')
+    
+    def dispense(self, port, volume=200):
+        if self.open and self.amf is not None:
+            if port != self.water:
+                self.amf.valveMove(port)
+                if port == self.flowcell:
+                    self.amf.setFlowRate(400,2)
+                else:
+                    self.amf.setFlowRate(1500,2)
+                self.amf.pumpDispenseVolume(volume)
+            else:
+                logging.error('Cannot dispense in water!')
     
     def flow(self):
         if self.open and self.amf is not None:

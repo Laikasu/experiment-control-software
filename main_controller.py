@@ -12,7 +12,7 @@ import yaml
 import processing as pc
 
 from controllers import StageController, PumpController, LaserController, CameraController
-from widgets import SweepDialog, PropertiesDialog
+from widgets import PropertiesDialog
 
 class PersistentWorkerThread(QThread):
     def __init__(self, func):
@@ -20,7 +20,7 @@ class PersistentWorkerThread(QThread):
         self.func = func
 
 
-class AquisitionWorkerThread(QThread):
+class acquisitionWorkerThread(QThread):
         done = Signal()
         def __init__(self, parent, func, *args):
             super().__init__(parent)
@@ -29,7 +29,7 @@ class AquisitionWorkerThread(QThread):
             self.func = func
             self.parent = parent
             
-            parent.cancel_aquisition_act.triggered.connect(self.terminate)
+            parent.cancel_acquisition_act.triggered.connect(self.terminate)
 
         def run(self):
             self.func(*self.args)
@@ -57,8 +57,8 @@ class MainController(QObject):
 
         self.got_image_mutex = QMutex()
         self.got_image = QWaitCondition()
-        self.aquiring = False
-        self.aquiring_mutex = QMutex()
+        self.acquiring = False
+        self.acquiring_mutex = QMutex()
 
         # Load settings
         self.settings = QSettings('Casper', 'Monitor')
@@ -194,7 +194,7 @@ class MainController(QObject):
     
 
     # =====================================================
-    # ===============   Aquisitions   =====================
+    # ===============   acquisitions   =====================
     # =====================================================
     
     def action(self, actions):
@@ -206,31 +206,77 @@ class MainController(QObject):
             return lambda: actions[0](actions[1:])
     
 
-    def start_aquisition(self, finish, *actions):
+    def start_acquisition(self, finish, *actions):
         actionsfunc = lambda: self.action(actions)
         # Clear photo buffer
         self.photos = []
-        self.aquisition_worker = AquisitionWorkerThread(self, actionsfunc)
-        self.aquisition_worker.done.connect(finish)
-        self.aquisition_worker.done.connect(self.finish_aquisition)
+        self.acquisition_worker = acquisitionWorkerThread(self, actionsfunc)
+        self.acquisition_worker.done.connect(finish)
+        self.acquisition_worker.done.connect(self.finish_acquisition)
 
-        self.aquiring_mutex.lock()
-        self.aquiring = True
-        self.aquiring_mutex.unlock()
+        self.acquiring_mutex.lock()
+        self.acquiring = True
+        self.acquiring_mutex.unlock()
         self.update_controls.emit()
 
-        self.aquisition_worker.start()
+        self.acquisition_worker.start()
 
-    def finish_aquisition(self):
-        self.aquiring_mutex.lock()
-        self.aquiring = False
-        self.aquiring_mutex.unlock()
+    def finish_acquisition(self):
+        self.acquiring_mutex.lock()
+        self.acquiring = False
+        self.acquiring_mutex.unlock()
         self.update_controls.emit()
     
 
     # =====================================================
     # =======   Complete measurement protocols   ==========
     # =====================================================
+
+    def acquire(self, params: dict):
+        """Accepts and parses requests"""
+        self.shape = []
+        actions = []
+        if 'media' in params.keys():
+            self.shape.append(len(params['media']))
+            actions.append(self.take_media_sweep)
+        if 'defocus' in params.keys():
+            self.shape.append(params['defocus'][2])
+            actions.append(self.take_z_sweep)
+        if 'wavelen' in params.keys():
+            self.shape.append(params['wavelen'][2])
+            actions.append(self.take_laser_sweep)
+        
+        actions.append(self.take_sequence_avg)
+        
+
+        self.start_acquisition(self.finish_sweeps, *actions)
+    
+    def finish_sweeps(self):
+        dialog = QFileDialog(caption='Save Acquisition')
+        dialog.setNameFilter('Raw Data (*.npy)')
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setDirectory(self.data_directory)
+        if dialog.exec():
+            filepath = dialog.selectedFiles()[0]
+            filepath = os.path.splitext(filepath)[0]
+            
+            data = np.squeeze(self.photos)
+            shape = np.shape(data)
+            images = data.reshape(*self.shape, self.shot_count+3, *shape[1:])
+            np.save(filepath + '.npy', images)
+            if len(self.shape) == 1:
+                tiff.imwrite(filepath + '.tif', images[:,0])
+
+            metadata = self.generate_metadata()
+            metadata['Laser.wavelength [nm]'] = {
+                'Start': int(self.wavelens[0]),
+                'Stop': int(self.wavelens[-1]),
+                'Number': len(self.wavelens)}
+            with open(filepath+'.yaml', 'w') as file:
+                yaml.dump(metadata, file)
+        self.data_directory = dialog.directory()
+
 
     # Snap and save one raw image
     def snap_photo(self):
@@ -251,7 +297,7 @@ class MainController(QObject):
         self.data_directory = dialog.directory()
 
     def snap_background(self):
-        self.start_aquisition(self.set_background, self.take_sequence)
+        self.start_acquisition(self.set_background, self.take_sequence)
     
     def set_background(self):
         self.update_background.emit(pc.common_background(self.photos))
@@ -259,7 +305,7 @@ class MainController(QObject):
     # Background subtracted photos
 
     def snap_processed_photo(self):
-        self.start_aquisition(self.save_processed_photo, self.take_sequence_avg)
+        self.start_acquisition(self.save_processed_photo, self.take_sequence_avg)
 
     def save_processed_photo(self):
         dialog = QFileDialog(caption='Save Photo')
@@ -285,13 +331,9 @@ class MainController(QObject):
         self.data_directory = dialog.directory()
 
 
-    def laser_sweep(self):
-        bandwidth = self.laser.bandwith
-        band_radius = self.laser.bandwith/2
-        dialog = SweepDialog(title='Laser Sweep Data', limits=(390+band_radius, 850-bandwidth, 390+bandwidth, 850-band_radius), defaults=(500, 600, 10), unit='nm')
-        if dialog.exec() and not self.aquiring:
-            self.wavelens = np.linspace(*dialog.get_values())
-            self.start_aquisition(self.save_laser_data, self.take_laser_sweep, self.take_sequence_avg)
+    def laser_sweep(self, start, stop, num):
+        self.wavelens = np.linspace(start, stop, num)
+        self.start_acquisition(self.save_laser_data, self.take_laser_sweep, self.take_sequence_avg)
     
     def save_laser_data(self):
         dialog = QFileDialog(caption='Save Wavelength Sweep')
@@ -319,11 +361,9 @@ class MainController(QObject):
         self.data_directory = dialog.directory()
     
 
-    def z_sweep(self):
-        dialog = SweepDialog(title='Z Sweep Data', limits=(-10, 10, -10, 10), defaults=(-1, 1, 10), unit='micron')
-        if dialog.exec() and not self.aquiring:
-            self.z_positions = np.linspace(*dialog.get_values())*10/1.4
-            self.start_aquisition(self.save_z_data, self.take_z_sweep, self.take_sequence_avg)
+    def z_sweep(self, start, stop, num):
+        self.z_positions = np.linspace(start, stop, num)
+        self.start_acquisition(self.save_z_data, self.take_z_sweep, self.take_sequence_avg)
     
     def save_z_data(self):
         dialog = QFileDialog(caption='Save Z Sweep')
@@ -352,10 +392,10 @@ class MainController(QObject):
         self.data_directory = dialog.directory()
     
 
-    def laser_defocus_sweep(self):
-        self.wavelens = np.linspace(520, 522, 2)
-        self.z_positions = np.linspace(-0.1, 0.1, 5)
-        self.start_aquisition(self.save_laser_defocus_data,
+    def laser_defocus_sweep(self, wavelens, z_positions):
+        self.wavelens = np.linspace(*wavelens)
+        self.z_positions = np.linspace(*z_positions)
+        self.start_acquisition(self.save_laser_defocus_data,
                               self.take_z_sweep, self.take_laser_sweep, self.take_sequence_avg)
     
     def save_laser_defocus_data(self):
@@ -393,7 +433,7 @@ class MainController(QObject):
         flowcell = 7
         waste = 1
         self.media = [water, 2, water, 3, water, 4, water, 5]
-        self.start_aquisition(self.save_media_data, self.take_media_sweep, self.take_sequence_avg)
+        self.start_acquisition(self.save_media_data, self.take_media_sweep, self.take_sequence_avg)
     
     def save_media_data(self):
         dialog = QFileDialog(caption='Save Media Data')

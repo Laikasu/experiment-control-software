@@ -89,7 +89,13 @@ class LaserController(QObject):
     def get_frequency(self) -> int:
         return nkt.registerReadU32(self.port, 1, 0x71, -1)[1]/1000
     
+    def set_power(self, percentage):
+        if self.open:
+            nkt.registerWriteU8(self.port, 1, 0x3E, int(percentage), -1)
+
     
+    def get_power(self):
+        return nkt.registerReadU8(self.port, 1, 0x7A, -1)
 
     def cleanup(self):
         if self.open:
