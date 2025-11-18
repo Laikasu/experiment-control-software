@@ -24,6 +24,7 @@ class CameraController(QObject):
         self.destroyed.connect(self.cleanup)
         self.property_dialog = None
         self.trigger_mode = False
+        self.device_property_map = None
 
         self.update_statistics_timer = QTimer()
         self.update_statistics_timer.timeout.connect(self.update_statistics)
@@ -69,9 +70,11 @@ class CameraController(QObject):
         if self.grabber.is_streaming:
             self.grabber.stream_stop()
         
-        del(self.grabber)
-        del(self.sink)
-        del(self.device_property_map)
+        if self.grabber.is_device_open:
+            del(self.grabber)
+            del(self.sink)
+            if self.device_property_map is not None:
+                del(self.device_property_map)
     
 
     def onCloseDevice(self):
@@ -146,7 +149,7 @@ class CameraController(QObject):
         self.device_property_map.set_value(ic4.PropId.GAIN_AUTO, 'Off')
         self.device_property_map.set_value(ic4.PropId.GAIN, 0)
         self.device_property_map.set_value(ic4.PropId.EXPOSURE_AUTO, 'Off')
-        self.device_property_map.set_value(ic4.PropId.PIXEL_FORMAT, 'Mono 16')
+        self.device_property_map.set_value(ic4.PropId.PIXEL_FORMAT, 'Mono16')
 
         self.roi_width = self.device_property_map.get_value_int(ic4.PropId.WIDTH)
         self.roi_height = self.device_property_map.get_value_int(ic4.PropId.HEIGHT)
@@ -205,3 +208,6 @@ class CameraController(QObject):
         self.device_property_map.set_value(ic4.PropId.OFFSET_X, int(roi.left()))
         self.device_property_map.set_value(ic4.PropId.OFFSET_Y, int(roi.top()))
         self.startStopStream()
+    
+    def set_autoexposure(self, value: str):
+        self.device_property_map.set_value(ic4.PropId.EXPOSURE_AUTO, value)

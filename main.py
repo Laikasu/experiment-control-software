@@ -32,6 +32,7 @@ def main():
     w.show()
 
     app.exec()
+    del(controller)
     ic4.Library.exit()
     
 

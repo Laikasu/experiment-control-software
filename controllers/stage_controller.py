@@ -42,4 +42,4 @@ class StageController():
     def move_stage(self, displacement):
         if self.open:
             displacement_micron = 3.45*displacement/60
-            self.mmc.setRelativeXYPosition(-displacement_micron[1], -displacement_micron[0])
+            self.mmc.setRelativeXYPosition(-float(displacement_micron[1]), -float(displacement_micron[0]))

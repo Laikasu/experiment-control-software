@@ -13,6 +13,8 @@ from pathlib import Path
 from datetime import datetime
 import shutil
 
+import logging
+
 import processing as pc
 
 from controllers import StageController, PumpController, LaserController, CameraController
@@ -33,7 +35,7 @@ class acquisitionWorkerThread(QThread):
             self.func = func
             self.parent = parent
             
-            parent.cancel_acquisition_act.triggered.connect(self.terminate)
+            parent.cancel_acquisition.connect(self.terminate)
 
         def run(self):
             self.func(*self.args)
@@ -43,6 +45,7 @@ class acquisitionWorkerThread(QThread):
 class MainController(QObject):
     update_controls = Signal()
     update_background = Signal(np.ndarray)
+    cancel_acquisition = Signal()
     def __init__(self, ):
         super().__init__()
 
@@ -67,6 +70,8 @@ class MainController(QObject):
         # Load settings
         self.settings = QSettings('Casper', 'Monitor')
 
+        self.data_directory = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.PicturesLocation)
+
 
         if self.settings.contains('magnification') and self.settings.contains('pxsize'):
             self.magnification = self.settings.value('magnification', type=int)
@@ -84,6 +89,8 @@ class MainController(QObject):
             self.settings.setValue('magnification', self.magnification)
             self.settings.setValue('pxsize', self.pxsize)
     
+    def cleanup(self):
+        self.camera.cleanup()
 
     # =====================================================
     # =================   Actions   =======================
@@ -97,7 +104,7 @@ class MainController(QObject):
             # Set position
             pos = z_zero + z
             self.z_position = i
-            self.stage.set_z_position(z)
+            self.stage.set_z_position(pos)
             time.sleep(2)
             # Next action
             self.action(actions)
@@ -110,11 +117,14 @@ class MainController(QObject):
         """Move to different wavelen then perform next action"""
         init_wavelen = self.laser.wavelen
         self.laser.set_wavelen(self.wavelens[0])
-        time.sleep(5)
+        time.sleep(2)
         self.laser_data_raw = []
         for i, wavelen in enumerate(self.wavelens):
             self.laser.set_wavelen(wavelen)
-            time.sleep(0.5)
+            # Auto exposure
+            self.camera.set_autoexposure('Continuous')
+            time.sleep(2)
+            self.camera.set_autoexposure('Off')
             # Take next action
             self.action(actions)
         
@@ -129,12 +139,17 @@ class MainController(QObject):
 
         self.pump.wait_till_ready()
         for medium in input:
-            self.pump.pickup(medium)
+            self.pump.pickup(medium, 40)
+            self.pump.wait_till_ready()
             self.pump.flow()
             self.pump.wait_till_ready()
+
+            # Auto adjust exposure
+            self.camera.set_autoexposure('Continuous')
+            time.sleep(10)
+            self.camera.set_autoexposure('Off')
             self.action(actions)
             self.store_medium_data()
-            time.sleep(2)
 
     def store_medium_data(self):
         data = np.squeeze(self.photos)
@@ -214,7 +229,7 @@ class MainController(QObject):
             # Final action
             return actions[0]()
         else:
-            return lambda: actions[0](actions[1:])
+            return actions[0](actions[1:])
     
 
     def start_acquisition(self, finish, *actions):
@@ -233,6 +248,8 @@ class MainController(QObject):
         self.acquisition_worker.start()
 
     def finish_acquisition(self):
+        logging.debug('Finished acquisition')
+        self.cancel_acquisition.emit()
         self.acquiring_mutex.lock()
         self.acquiring = False
         self.acquiring_mutex.unlock()
@@ -244,6 +261,7 @@ class MainController(QObject):
     # =====================================================
 
     def acquire(self, params: dict):
+        logging.debug(f'starting acquisition with {params}')
         """Accepts and parses requests"""
         self.shape = []
         self.temp_files = []
@@ -468,7 +486,7 @@ class MainController(QObject):
         if exposure_auto:
             exposure_time = 'auto'
         else:
-            exposure_time = self.camera.get_exposure_time
+            exposure_time = self.camera.get_exposure_time()
         
         if len(self.wavelens) > 0:
             wavelen = {

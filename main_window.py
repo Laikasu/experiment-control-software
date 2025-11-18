@@ -43,6 +43,7 @@ class MainWindow(QMainWindow):
         # UI elements
         self.laser_window = LaserWindow(self)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.laser_window)
+        self.update_laser_control()
         self.laser_window.hide()
 
         self.sweep_window = SweepWindow(self)
@@ -68,6 +69,7 @@ class MainWindow(QMainWindow):
         self.pump_window.start_pickup.connect(self.controller.pump.pickup)
         self.pump_window.start_dispense.connect(self.controller.pump.dispense)
         self.pump_window.start_clean.connect(self.controller.pump.clean_pump)
+        self.controller.pump.changedState.connect(lambda open: self.pump_window.setVisible(open))
 
         self.controller.camera.new_frame.connect(self.update_display)
         self.controller.camera.state_changed.connect(self.update_controls)
@@ -293,9 +295,9 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.camera_label)
         self.controller.camera.label_update.connect(self.camera_label.setText)
     
-    # def test(self, button):
-    #         print(self.laser.open)
-
+    def closeEvent(self, event):
+        self.controller.cleanup()
+        super().closeEvent(event)
     
 
     def update_laser_control(self):
@@ -304,6 +306,8 @@ class MainWindow(QMainWindow):
             wavelen = self.controller.laser.wavelen
             power = self.controller.laser.get_power()
             self.laser_window.set_values(wavelen, bandwidth, power)
+        self.laser_window.setVisible(self.controller.laser.open)
+
 
     def update_controls(self):
         # Depending booleans
@@ -314,8 +318,9 @@ class MainWindow(QMainWindow):
         valid_camera  = self.controller.camera.grabber.is_device_valid
         camera_open = self.controller.camera.grabber.is_device_open
 
-        self.laser_window.setVisible(self.controller.laser.open)
+
         self.laser_parameters_act.setEnabled(self.controller.laser.open)
+        self.pump_act.setEnabled(self.controller.pump.open)
 
         if not camera_open:
             self.statistics_label.clear()

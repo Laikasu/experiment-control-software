@@ -5,7 +5,7 @@ from PySide6.QtGui import QRegularExpressionValidator
 class PumpWindow(QDockWidget):
     start_dispense = Signal(int, int)
     start_pickup = Signal(int, int)
-    start_clean = Signal(list[int])
+    start_clean = Signal(list)
     def __init__(self, parent):
         super().__init__(parent=parent)
         self.setWindowTitle("Pump")
@@ -14,7 +14,7 @@ class PumpWindow(QDockWidget):
 
         
         self.port = QComboBox()
-        self.port.addItems(['1: Waste', '2', '3', '4', '5', '6', '7: Flowcell', '8', '9', '10: Water'])
+        self.port.addItems(['1: Water', '2', '3', '4', '5', '6', '7', '8: Flowcell', '9', '10: Waste'])
         self.port.currentTextChanged.connect(self.update_controls)
 
         self.volume = QSpinBox(minimum=0, maximum=250, singleStep=10, suffix = 'uL')
@@ -22,9 +22,12 @@ class PumpWindow(QDockWidget):
 
 
         self.pickup_button = QPushButton('Pickup')
+        self.pickup_button.released.connect(self.pickup)
+        
         self.dispense_button = QPushButton('Dispense')
+        self.dispense_button.released.connect(self.dispense)
 
-        button_layout = QHBoxLayout(self)
+        button_layout = QHBoxLayout()
         button_layout.addWidget(self.pickup_button)
         button_layout.addWidget(self.dispense_button)
         
@@ -34,6 +37,7 @@ class PumpWindow(QDockWidget):
         validator = QRegularExpressionValidator(QRegularExpression(r"^\d*$"))
         self.clean_ports.setValidator(validator)
         self.clean_button = QPushButton("Clean")
+        self.clean_button.released.connect(self.clean)
         clean_layout = QVBoxLayout()
         clean_layout.addWidget(self.clean_ports)
         clean_layout.addWidget(self.clean_button)

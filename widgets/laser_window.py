@@ -41,4 +41,4 @@ class LaserWindow(QDockWidget):
         self.update_bandwidth(bandwidth)
         self.center.setValue(wavelen)
         self.bandwidth.setValue(bandwidth)
-        self.power.setValue(power)
+        self.power.setValue(power[1])

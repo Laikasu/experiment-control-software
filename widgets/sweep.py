@@ -13,15 +13,16 @@ class SweepWindow(QDockWidget):
         # Laser
         self.laser_sweep = QCheckBox()
         self.laser_sweep.toggled.connect(self.update_controls)
-        self.laser_start = QDoubleSpinBox(singleStep=10, decimals=1, suffix=f" nm")
-        self.laser_stop = QDoubleSpinBox(minimum=10, singleStep=10, decimals=1, suffix=f" nm")
+        # Implement proper limits
+        self.laser_start = QDoubleSpinBox(minimum=450, maximum=750, value=500, singleStep=10, decimals=1, suffix=f" nm")
+        self.laser_stop = QDoubleSpinBox(minimum=450, maximum=750, value=600, singleStep=10, decimals=1, suffix=f" nm")
         self.laser_num = QSpinBox(minimum=1, singleStep=10, value=10)
 
         # Defocus
         self.defocus_sweep = QCheckBox()
         self.defocus_sweep.toggled.connect(self.update_controls)
-        self.defocus_start = QDoubleSpinBox(singleStep=10, decimals=1, suffix=f" nm")
-        self.defocus_stop = QDoubleSpinBox(minimum=10, singleStep=10, decimals=1, suffix=f" nm")
+        self.defocus_start = QDoubleSpinBox(minimum=-10, maximum=10, singleStep=10, decimals=1, suffix=f" nm")
+        self.defocus_stop = QDoubleSpinBox(minimum=-10, maximum=10, singleStep=10, decimals=1, suffix=f" nm")
         self.defocus_num = QSpinBox(minimum=1, singleStep=10, value=10)
 
 
@@ -99,7 +100,7 @@ class SweepWindow(QDockWidget):
             params['defocus'] = z_positions
         
         if self.laser_sweep.isChecked():
-            wavelens = (self.defocus_start.value(), self.defocus_stop.value(), self.defocus_num.value())
-            params['wavelens'] = wavelens
+            wavelens = (self.laser_start.value(), self.laser_stop.value(), self.laser_num.value())
+            params['wavelen'] = wavelens
         
         self.start_acquisition.emit(params)

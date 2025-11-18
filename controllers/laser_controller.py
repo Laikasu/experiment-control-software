@@ -57,7 +57,7 @@ class LaserController(QObject):
         else:
             self.open = False
             if warning:
-                logging.error('Error', 'Failed opening laser: Port is busy.')
+                logging.error('Failed opening laser: Port is busy.')
         self.changedState.emit(self.open)
     
     def release(self):
@@ -72,13 +72,18 @@ class LaserController(QObject):
     def set_upper(self, wavelen: float):
         nkt.registerWriteU16(self.port, 16, 0x33, int(wavelen*10), -1)
     
+    def update_bounds(self):
+        self.set_lower(self.wavelen - self.bandwith/2)
+        self.set_upper(self.wavelen + self.bandwith/2)
+        
     def set_bandwith(self, width: float):
         self.bandwith = width
+        self.update_bounds()
     
     def set_wavelen(self, wavelen):
         self.wavelen = wavelen
-        self.set_lower(wavelen - self.bandwith/2)
-        self.set_upper(wavelen + self.bandwith/2)
+        self.update_bounds()
+        
     
     def toggle_laser(self):
         if self.open:
@@ -95,7 +100,7 @@ class LaserController(QObject):
 
     
     def get_power(self):
-        return nkt.registerReadU8(self.port, 1, 0x7A, -1)
+        return nkt.registerReadU8(self.port, 1, 0x3E, -1)
 
     def cleanup(self):
         if self.open:

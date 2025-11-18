@@ -7,23 +7,23 @@ import numpy as np
 
 class VideoView(QGraphicsView):
     roi_set = Signal(QRect)
-    move_stage = Signal(NDArray)
+    move_stage = Signal(np.ndarray)
     def __init__(self, parent=None):
         super().__init__(parent)
         self._scene = QGraphicsScene(self)
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setDragMode(QGraphicsView.ScrollHandDrag)
         
         self.camera_display = QGraphicsPixmapItem()
         self._scene.addItem(self.camera_display)
 
         self.background = QGraphicsRectItem()
         self.background.setZValue(-1)
-        self.background.setBrush(QBrush(Qt.GlobalColor.black))
+        self.background.setBrush(QBrush(Qt.black))
         self._scene.addItem(self.background)
 
         self.roi_graphic = QGraphicsRectItem()
         self.roi_graphic.setZValue(1)
-        self.roi_graphic.setPen(QPen(Qt.GlobalColor.red, 2))
+        self.roi_graphic.setPen(QPen(Qt.red, 2))
         self._scene.addItem(self.roi_graphic)
 
         self.setMinimumSize(640, 480)
@@ -44,9 +44,9 @@ class VideoView(QGraphicsView):
     @mode.setter
     def mode(self, new_mode: str):
         if (new_mode == "navigation" or new_mode =="move"):
-            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
         elif (new_mode == "roi"):
-            self.setDragMode(QGraphicsView.DragMode.NoDrag)
+            self.setDragMode(QGraphicsView.NoDrag)
         else:
             raise ValueError(f"Unexpected input: mode {new_mode} unknown")
         self._mode = new_mode
@@ -69,9 +69,9 @@ class VideoView(QGraphicsView):
         height, width, channels = np.shape(frame)
             
         if frame.dtype == np.uint16:
-            self.camera_display.setPixmap(QPixmap.fromImage(QImage(frame.data, width, height, 2*channels*width, QImage.Format.Format_Grayscale16)))
+            self.camera_display.setPixmap(QPixmap.fromImage(QImage(frame.data, width, height, 2*channels*width, QImage.Format_Grayscale16)))
         elif frame.dtype == np.uint8:
-            self.camera_display.setPixmap(QPixmap.fromImage(QImage(frame.data, width, height, channels*width, QImage.Format.Format_Grayscale8)))
+            self.camera_display.setPixmap(QPixmap.fromImage(QImage(frame.data, width, height, channels*width, QImage.Format_Grayscale8)))
 
         
 
@@ -130,14 +130,14 @@ class VideoView(QGraphicsView):
         """
         rect = self.mapToScene(self.viewport().rect()).boundingRect()
         size = rect.size()
-        w = int(size.width() // 2)
-        h = int(size.height() // 2)
+        w = size.width() // 2
+        h = size.height() // 2
         m = QMargins(w, h, w, h)
         rect = self.background.rect().marginsAdded(m).toRect()
         self.setSceneRect(rect)
     
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.LeftButton:
             if self.mode == "move":
                 self.start_point = self.mapToScene(event.pos())
             if self.mode == "roi":
@@ -167,7 +167,7 @@ class VideoView(QGraphicsView):
         return super().mouseMoveEvent(event)
     
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.LeftButton:
             if self.start_point is not None:
                 if self.mode == "move":
                     self.start_point = None

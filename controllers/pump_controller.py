@@ -9,13 +9,12 @@ class PumpController(QObject):
     open = False
     def __init__(self, parent):
         super().__init__(parent=parent)
-        self.setup()
         self.destroyed.connect(self.cleanup)
         self.amf = None
-        self.water = 10
-        self.flowcell = 7
-        self.waste = 1
-        self.volume = 200
+        self.water = 1
+        self.flowcell = 8
+        self.waste = 10
+        self.setup()
 
     def setup(self):
         logging.debug('Looking for pump')
@@ -54,31 +53,40 @@ class PumpController(QObject):
             self.amf.disconnect()
     
     def pickup(self, port, volume=200):
+        logging.debug(f'Picking up {volume}uL from port {port}')
         if self.open and self.amf is not None:
+            if not self.amf.getHomeStatus():
+                    self.amf.home(False)
             if port != self.waste and port != self.flowcell:
                 self.amf.valveMove(port)
                 self.amf.setFlowRate(1500,2)
-                self.amf.pumpPickupVolume(volume)
+                self.amf.pumpPickupVolume(volume, block=False)
             else:
                 logging.error('Cannot pickup waste or flowcell!')
     
     def dispense(self, port, volume=200):
+        logging.debug(f'Dispensing {volume}uL to port {port}')
         if self.open and self.amf is not None:
+            if not self.amf.getHomeStatus():
+                self.amf.home(False)
             if port != self.water:
                 self.amf.valveMove(port)
                 if port == self.flowcell:
-                    self.amf.setFlowRate(400,2)
+                    self.amf.setFlowRate(100,2)
                 else:
                     self.amf.setFlowRate(1500,2)
-                self.amf.pumpDispenseVolume(volume)
+                self.amf.pumpDispenseVolume(volume, block=False)
             else:
                 logging.error('Cannot dispense in water!')
     
-    def flow(self):
+    def flow(self, volume=40):
+        logging.debug(f'Dispensing {volume}uL to flowcell')
         if self.open and self.amf is not None:
-            self.amf.setFlowRate(400,2)
+            if not self.amf.getHomeStatus():
+                    self.amf.home(False)
+            self.amf.setFlowRate(100,2)
             self.amf.valveMove(self.flowcell)
-            self.amf.pumpDispenseVolume(self.volume,block=False)
+            self.amf.pumpDispenseVolume(volume,block=False)
     
     def wait_till_ready(self):
         if self.open and self.amf is not None:
