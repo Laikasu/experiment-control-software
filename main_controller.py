@@ -1,4 +1,4 @@
-from PySide6.QtCore import QObject, Signal, QThread, QMutex, QWaitCondition, Qt, QSettings, QStandardPaths
+from PySide6.QtCore import QObject, Signal, QThread, QMutex, QWaitCondition, Qt, QSettings, QStandardPaths, QTimer
 from PySide6.QtWidgets import QFileDialog
 
 import time
@@ -122,9 +122,7 @@ class MainController(QObject):
         for i, wavelen in enumerate(self.wavelens):
             self.laser.set_wavelen(wavelen)
             # Auto exposure
-            self.camera.set_autoexposure('Continuous')
-            time.sleep(2)
-            self.camera.set_autoexposure('Off')
+            self.auto_expose(2)
             # Take next action
             self.action(actions)
         
@@ -145,9 +143,7 @@ class MainController(QObject):
             self.pump.wait_till_ready()
 
             # Auto adjust exposure
-            self.camera.set_autoexposure('Continuous')
-            time.sleep(10)
-            self.camera.set_autoexposure('Off')
+            self.auto_expose(10)
             self.action(actions)
             self.store_medium_data()
 
@@ -574,3 +570,13 @@ class MainController(QObject):
         self.camera.set_roi(roi)
         self.subtract_background = False
         self.background = None
+    
+    def auto_expose(self, seconds=2.):
+        self.camera.set_autoexposure('Continuous')
+        time.sleep(seconds)
+        self.camera.set_autoexposure('Off')
+    
+    def auto_expose_non_blocking(self, seconds=2.):
+        self.camera.set_autoexposure('Continuous')
+        QTimer.singleShot(seconds*1000, lambda: self.camera.set_autoexposure('Off'))
+        

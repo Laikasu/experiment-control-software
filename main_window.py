@@ -169,6 +169,9 @@ class MainWindow(QMainWindow):
         self.laser_sweep_act = add_action(QAction('Sweep Laser'))
         self.laser_sweep_act.triggered.connect(self.controller.laser_sweep)
 
+        self.auto_expose_act = add_action(QAction('Auto Expose'))
+        self.auto_expose_act.triggered.connect(lambda: self.controller.auto_expose_non_blocking())
+
         self.defocus_sweep_act = add_action(QAction('Defocus Sweep'))
         self.defocus_sweep_act.setStatusTip('Perform a focus sweep')
         self.defocus_sweep_act.triggered.connect(self.defocus_sweep)
@@ -263,16 +266,14 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addAction(self.start_live_act)
         toolbar.addAction(self.video_act)
+        toolbar.addAction(self.auto_expose_act)
         toolbar.addSeparator()
         toolbar.addAction(self.set_roi_act)
         toolbar.addAction(self.move_act)
         toolbar.addSeparator()
         toolbar.addAction(self.snap_raw_photo_act)
         toolbar.addAction(self.snap_processed_photo_act)
-        toolbar.addSeparator()
-        toolbar.addAction(self.laser_sweep_act)
-        toolbar.addAction(self.defocus_sweep_act)
-        toolbar.addAction(self.media_act)
+        toolbar.addAction(self.show_acquisition_act)
 
         
         # button = QPushButton('Test', toolbar)

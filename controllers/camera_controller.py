@@ -25,6 +25,7 @@ class CameraController(QObject):
         self.property_dialog = None
         self.trigger_mode = False
         self.device_property_map = None
+        self.dropped = 0
 
         self.update_statistics_timer = QTimer()
         self.update_statistics_timer.timeout.connect(self.update_statistics)
@@ -113,6 +114,12 @@ class CameraController(QObject):
             return
         try:
             stats = self.grabber.stream_statistics
+
+            # Fixes that camera randomly stops working
+            if stats.device_transmission_error > self.dropped + 10:
+                self.dropped = stats.device_transmission_error
+                self.startStopStream()
+                self.startStopStream()
             text = f'Frames Delivered: {stats.sink_delivered} Dropped: {stats.device_transmission_error}/{stats.device_underrun}/{stats.transform_underrun}/{stats.sink_underrun}'
             tooltip = (
                 f'Frames Delivered: {stats.sink_delivered}'
