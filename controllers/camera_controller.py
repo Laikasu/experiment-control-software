@@ -115,7 +115,7 @@ class CameraController(QObject):
         try:
             stats = self.grabber.stream_statistics
 
-            # Fixes that camera randomly stops working
+            # Sometimes the camera randomly has a transmission error and starts dropping all frames. Restaring fixes this.
             if stats.device_transmission_error > self.dropped + 10:
                 self.dropped = stats.device_transmission_error
                 self.startStopStream()

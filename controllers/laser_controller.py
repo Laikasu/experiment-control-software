@@ -14,7 +14,6 @@ class LaserController(QObject):
         self.open = False
         self.trigger_mode = 0 # Internal
         self.pulses = 10
-        self.destroyed.connect(self.cleanup)
         self.port = None
         if os.name == 'nt':
             self.grab(warning=False)

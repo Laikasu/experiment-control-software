@@ -91,6 +91,8 @@ class MainController(QObject):
     
     def cleanup(self):
         self.camera.cleanup()
+        self.pump.cleanup()
+        self.laser.cleanup()
 
     # =====================================================
     # =================   Actions   =======================
@@ -105,7 +107,7 @@ class MainController(QObject):
             pos = z_zero + z
             self.z_position = i
             self.stage.set_z_position(pos)
-            time.sleep(2)
+            time.sleep(1)
             # Next action
             self.action(actions)
 
@@ -139,7 +141,7 @@ class MainController(QObject):
         for medium in input:
             self.pump.pickup(medium, 40)
             self.pump.wait_till_ready()
-            self.pump.flow()
+            self.pump.dispense(self.pump.flowcell, 40)
             self.pump.wait_till_ready()
 
             # Auto adjust exposure
@@ -276,6 +278,7 @@ class MainController(QObject):
             self.shape.append(params['wavelen'][2])
             self.wavelens = np.linspace(*params['wavelen'])
             actions.append(self.take_laser_sweep)
+        
         
         actions.append(self.take_sequence_avg)
         
@@ -572,9 +575,14 @@ class MainController(QObject):
         self.background = None
     
     def auto_expose(self, seconds=2.):
-        self.camera.set_autoexposure('Continuous')
-        time.sleep(seconds)
-        self.camera.set_autoexposure('Off')
+        self.camera.new_frame.connect(self.expose, Qt.ConnectionType.SingleShotConnection)
+        pass
+        # self.camera.set_autoexposure('Continuous')
+        # time.sleep(seconds)
+        # self.camera.set_autoexposure('Off')
+    
+    def expose(self, image: np.ndarray):
+        print(np.max(image))
     
     def auto_expose_non_blocking(self, seconds=2.):
         self.camera.set_autoexposure('Continuous')

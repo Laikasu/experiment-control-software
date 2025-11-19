@@ -16,14 +16,14 @@ class SweepWindow(QDockWidget):
         # Implement proper limits
         self.laser_start = QDoubleSpinBox(minimum=450, maximum=750, value=500, singleStep=10, decimals=1, suffix=f" nm")
         self.laser_stop = QDoubleSpinBox(minimum=450, maximum=750, value=600, singleStep=10, decimals=1, suffix=f" nm")
-        self.laser_num = QSpinBox(minimum=1, singleStep=10, value=10)
+        self.laser_num = QSpinBox(minimum=1, singleStep=2, value=10)
 
         # Defocus
         self.defocus_sweep = QCheckBox()
         self.defocus_sweep.toggled.connect(self.update_controls)
-        self.defocus_start = QDoubleSpinBox(minimum=-10, maximum=10, singleStep=10, decimals=1, suffix=f" nm")
-        self.defocus_stop = QDoubleSpinBox(minimum=-10, maximum=10, singleStep=10, decimals=1, suffix=f" nm")
-        self.defocus_num = QSpinBox(minimum=1, singleStep=10, value=10)
+        self.defocus_start = QDoubleSpinBox(minimum=-10, maximum=10, singleStep=0.1, value=-0.5, decimals=1, suffix=f" nm")
+        self.defocus_stop = QDoubleSpinBox(minimum=-10, maximum=10, singleStep=0.1, value=0.5, decimals=1, suffix=f" nm")
+        self.defocus_num = QSpinBox(minimum=1, singleStep=2, value=10)
 
 
         # Media
