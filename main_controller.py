@@ -3,6 +3,7 @@ from PySide6.QtWidgets import QFileDialog
 
 import time
 import numpy as np
+from numpy.typing import NDArray
 
 import os
 import tifffile as tiff
@@ -61,6 +62,11 @@ class MainController(QObject):
 
 
         self.shot_count = 10 # Shoot 10 images to average over
+
+        # Storage for acquisition parameters
+        self.media: list = []
+        self.z_positions: NDArray = np.array([])
+        self.wavelens: NDArray = np.array([])
 
         self.got_image_mutex = QMutex()
         self.got_image = QWaitCondition()
@@ -251,6 +257,9 @@ class MainController(QObject):
         self.acquiring_mutex.lock()
         self.acquiring = False
         self.acquiring_mutex.unlock()
+        self.media = []
+        self.z_positions = np.array([])
+        self.wavelens = np.array([])
         self.update_controls.emit()
     
 
@@ -263,18 +272,21 @@ class MainController(QObject):
         """Accepts and parses requests"""
         self.shape = []
         self.temp_files = []
-        self.media = []
-        self.z_positions = []
-        self.wavelens = []
         actions = []
         if 'media' in params.keys():
+            if not self.pump.open:
+                raise RuntimeError('Pump is not open, cannot sweep media')
             self.media = params['media']
             actions.append(self.take_media_sweep)
         if 'defocus' in params.keys():
+            if self.stage.z_stage is None:
+                raise RuntimeError('Z stage is not open, cannot sweep defocus')
             self.shape.append(params['defocus'][2])
             self.z_positions = np.linspace(*params['defocus'])
             actions.append(self.take_z_sweep)
         if 'wavelen' in params.keys():
+            if not self.laser.open:
+                raise RuntimeError('Laser is not open, cannot sweep media')
             self.shape.append(params['wavelen'][2])
             self.wavelens = np.linspace(*params['wavelen'])
             actions.append(self.take_laser_sweep)
@@ -330,12 +342,8 @@ class MainController(QObject):
             filepath = os.path.splitext(filepath)[0]
             tiff.imwrite(filepath + '.tif', image)
         self.data_directory = dialog.directory()
-
-    def snap_background(self):
-        self.start_acquisition(self.set_background, self.take_sequence)
     
-    def set_background(self):
-        self.update_background.emit(pc.common_background(self.photos))
+    
     
     # Background subtracted photos
 
@@ -417,68 +425,6 @@ class MainController(QObject):
             with open(filepath +'.yaml', 'w') as file:
                 yaml.dump(metadata, file)
         self.data_directory = dialog.directory()
-    
-
-    def laser_defocus_sweep(self, wavelens, z_positions):
-        self.wavelens = np.linspace(*wavelens)
-        self.z_positions = np.linspace(*z_positions)
-        self.start_acquisition(self.save_laser_defocus_data,
-                              self.take_z_sweep, self.take_laser_sweep, self.take_sequence_avg)
-    
-    def save_laser_defocus_data(self):
-        dialog = QFileDialog(caption='Save Wavelength defocus Sweep')
-        dialog.setNameFilter('raw data (*.npy)')
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setDirectory(self.data_directory)
-        if dialog.exec():
-            filepath = dialog.selectedFiles()[0]
-            filepath = os.path.splitext(filepath)[0]
-            
-            data = np.squeeze(self.photos)
-            shape = np.shape(data)
-            images = data.reshape(len(self.z_positions), len(self.wavelens), self.shot_count+3, *shape[1:])
-            np.save(filepath + '.npy', images)
-
-            metadata = self.generate_metadata()
-            
-            with open(filepath+'.yaml', 'w') as file:
-                yaml.dump(metadata, file)
-        self.data_directory = dialog.directory()
-    
-    # Media sweep
-    def media_sweep(self):
-        water = 10
-        flowcell = 7
-        waste = 1
-        self.media = [water, 2, water, 3, water, 4, water, 5]
-        self.start_acquisition(self.save_media_data, self.take_media_sweep, self.take_sequence_avg)
-    
-    def save_media_data(self):
-        dialog = QFileDialog(caption='Save Media Data')
-        dialog.setNameFilter('TIFF image sequence (*.tif)')
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setDirectory(self.data_directory)
-        if dialog.exec():
-            filepath = dialog.selectedFiles()[0]
-            filepath = os.path.splitext(filepath)[0]
-
-            data = np.squeeze(self.photos)
-            shape = np.shape(data)
-            images = data.reshape(len(self.media), self.shot_count+3, *shape[1:])
-            np.save(filepath + '.npy', images)
-            tiff.imwrite(filepath + '.tif', images[:,0])
-
-            metadata = self.generate_metadata()
-            
-            with open(filepath +'.yaml', 'w') as file:
-                yaml.dump(metadata, file)
-        self.data_directory = dialog.directory()
-
-    
-
-    ##
 
     def generate_metadata(self) -> dict:
         exposure_auto = self.camera.get_exposure_auto()
@@ -571,14 +517,12 @@ class MainController(QObject):
     def update_roi(self, roi):
         # Set ROI in camera
         self.camera.set_roi(roi)
-        self.subtract_background = False
-        self.background = None
     
-    def auto_expose(self):
-        self.camera.new_frame.connect(self.expose, Qt.ConnectionType.SingleShotConnection)
+    def auto_expose(self, seconds=2.):
+        self.camera.set_autoexposure('Continuous')
+        time.sleep(seconds)
+        self.camera.set_autoexposure('Off')
     
-    def expose(self, image: np.ndarray):
-        exp = np.average(image)
-        setpoint = 30000
-        self.camera.set_exposure(np.clip(self.camera.get_exposure()*setpoint/exp, 0, 1_000_000))
-        
+    def auto_expose_non_blocking(self, seconds=2.):
+        self.camera.set_autoexposure('Continuous')
+        QTimer.singleShot(int(seconds*1000), lambda: self.camera.set_autoexposure('Off'))

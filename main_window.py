@@ -18,7 +18,6 @@ class PersistentWorkerThread(QThread):
 
 
 class MainWindow(QMainWindow):
-    new_processed_frame = Signal(np.ndarray)
     def __init__(self, controller: MainController):
         super().__init__()
         logging.basicConfig(level=logging.DEBUG)
@@ -81,10 +80,6 @@ class MainWindow(QMainWindow):
         
         self.move_stage_worker = PersistentWorkerThread(self.controller.stage.move_stage)
         self.video_view.move_stage.connect(self.move_stage_worker.func)
-
-        self.background: np.ndarray | None = None
-        self.subtract_background = False
-        self.controller.update_background.connect(self.set_background)
 
         self.createUI()
         self.update_controls()
@@ -151,15 +146,6 @@ class MainWindow(QMainWindow):
         self.move_act.setCheckable(True)
         self.move_act.triggered.connect(lambda: self.toggle_mode('move'))
 
-        self.subtract_background_act = add_action(QAction('Background Subtraction', self))
-        self.subtract_background_act.setStatusTip('Toggle background subtraction')
-        self.subtract_background_act.setCheckable(True)
-        self.subtract_background_act.toggled.connect(self.set_background_subtraction)
-
-        self.snap_background_act = add_action(QAction('&Snap Background', self))
-        self.snap_background_act.setStatusTip('Snap background image')
-        self.snap_background_act.triggered.connect(self.controller.snap_background)
-
         self.snap_raw_photo_act = add_action(QAction('Snap Raw Photo', self))
         self.snap_raw_photo_act.setStatusTip('Snap a single raw photo')
         self.snap_raw_photo_act.triggered.connect(self.controller.snap_photo)
@@ -169,22 +155,14 @@ class MainWindow(QMainWindow):
         self.snap_processed_photo_act.triggered.connect(self.controller.snap_processed_photo)
 
         self.laser_sweep_act = add_action(QAction('Sweep Laser'))
-        self.laser_sweep_act.triggered.connect(self.controller.laser_sweep)
-
-        self.auto_expose_act = add_action(QAction('Auto Expose'))
-        self.auto_expose_act.triggered.connect(self.controller.auto_expose)
+        self.laser_sweep_act.triggered.connect(self.laser_sweep)
 
         self.defocus_sweep_act = add_action(QAction('Defocus Sweep'))
         self.defocus_sweep_act.setStatusTip('Perform a focus sweep')
         self.defocus_sweep_act.triggered.connect(self.defocus_sweep)
 
-        self.z_wavelen_sweep_act = add_action(QAction('Defocus wavelen Sweep'))
-        self.z_wavelen_sweep_act.setStatusTip('Perform a focus sweep')
-        self.z_wavelen_sweep_act.triggered.connect(self.controller.laser_defocus_sweep)
-
-        self.media_act = add_action(QAction('Vary Media'))
-        self.media_act.setStatusTip('Perform a temporal variation of media')
-        self.media_act.triggered.connect(self.controller.media_sweep)
+        self.auto_expose_act = add_action(QAction('Auto Expose'))
+        self.auto_expose_act.triggered.connect(self.controller.auto_expose_non_blocking)
 
         self.video_act = add_action(QAction(QIcon(application_path + 'images/recordstart.png'), '&Capture Video', self))
         self.video_act.setToolTip('Capture Video')
@@ -240,16 +218,15 @@ class MainWindow(QMainWindow):
 
         view_menu = self.menuBar().addMenu('&View')
         view_menu.addAction(self.show_acquisition_act)
-        view_menu.addAction(self.snap_background_act)
-        view_menu.addAction(self.subtract_background_act)
+        view_menu.addAction(self.pump_act)
+        view_menu.addAction(self.laser_parameters_act)
 
         capture_menu = self.menuBar().addMenu('&Capture')
         capture_menu.addAction(self.snap_raw_photo_act)
         capture_menu.addAction(self.snap_processed_photo_act)
         capture_menu.addSeparator()
         capture_menu.addAction(self.defocus_sweep_act)
-        capture_menu.addAction(self.z_wavelen_sweep_act)
-        capture_menu.addAction(self.media_act)
+        capture_menu.addAction(self.laser_sweep_act)
         capture_menu.addAction(self.cancel_acquisition_act)
         
 
@@ -349,6 +326,8 @@ class MainWindow(QMainWindow):
             if not pump_open:
                 self.pump_window.setVisible(False)
 
+            #self.sweep_window.laser_group.
+
             self.grab_release_pump_act.setChecked(pump_open)
             self.clean_pump_act.setEnabled(pump_open)
 
@@ -360,29 +339,21 @@ class MainWindow(QMainWindow):
             self.close_device_act.setEnabled(camera_open)
 
             # Captures
-            self.snap_background_act.setEnabled(streaming and xy_stage_connected)
             self.snap_processed_photo_act.setEnabled(streaming and xy_stage_connected)
             self.snap_raw_photo_act.setEnabled(streaming)
 
             self.laser_sweep_act.setEnabled(streaming and laser_open)
-            self.media_act.setEnabled(streaming and pump_open)
             self.defocus_sweep_act.setEnabled(streaming and z_stage_connected and xy_stage_connected)
-            self.z_wavelen_sweep_act.setEnabled(streaming and z_stage_connected and xy_stage_connected and laser_open)
 
             # Video view functions
             self.set_roi_act.setEnabled(valid_camera and not self.video_view.background.rect().isEmpty())
             self.move_act.setEnabled(streaming and xy_stage_connected)
             self.move_act.setChecked(self.video_view.mode == 'move')
             self.set_roi_act.setChecked(self.video_view.mode == 'roi')
-
-            self.subtract_background_act.setEnabled(self.background is not None)
-            self.subtract_background_act.setChecked(self.subtract_background)
             
             # Acquisition
             if acquiring:
                 self.video_view.mode = 'navigation'
-                self.subtract_background = False
-                self.subtract_background_act.setChecked(False)
                 
                 for act in self.acts:
                     act.setEnabled(False)
@@ -390,12 +361,6 @@ class MainWindow(QMainWindow):
             self.cancel_acquisition_act.setEnabled(acquiring)
     
     
-
-    def set_background_subtraction(self, value: bool):
-        self.subtract_background = value
-    
-    def set_background(self, background):
-        self.background = background
     
     def toggle_mode(self, mode):
         if self.video_view.mode == mode:
@@ -407,11 +372,6 @@ class MainWindow(QMainWindow):
         
     
     def update_display(self, frame: np.ndarray):
-        if (self.subtract_background and self.background is not None):
-            # (reference + signal) / reference
-            diff = pc.background_subtracted(frame, self.background)
-            frame = pc.float_to_mono(diff)
-        self.new_processed_frame.emit(frame)
         self.video_view.update_image(frame)
     
     def laser_sweep(self):

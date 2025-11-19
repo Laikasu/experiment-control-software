@@ -24,10 +24,10 @@ class PumpController(QObject):
         self.water = 1
         self.flowcell = 8
         self.waste = 10
-        self.setup()
+        self.setup(warning=False)
 
-    def setup(self):
-        logging.debug('Looking for pump')
+    def setup(self, warning=True):
+        logging.debug('Opening pump')
         device_list = amfTools.util.getProductList(connection_mode="USB/RS232")
         if len(device_list) > 0:
             amf = AMF(product=device_list[0])
@@ -39,7 +39,9 @@ class PumpController(QObject):
             self.open = True
             logging.debug('Pump connected')
         else:
-            logging.debug('No pump found')
+            if warning:
+                logging.warning('No pump available')
+            logging.debug('No pump available')
             return None
 
     def toggle(self):

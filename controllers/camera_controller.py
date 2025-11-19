@@ -21,7 +21,6 @@ class CameraController(QObject):
         super().__init__(parent)
         self.grabber = ic4.Grabber()
         self.grabber.event_add_device_lost(lambda g: QApplication.postEvent(self, QEvent(DEVICE_LOST_EVENT)))
-        self.destroyed.connect(self.cleanup)
         self.property_dialog = None
         self.trigger_mode = False
         self.device_property_map = None
@@ -71,11 +70,11 @@ class CameraController(QObject):
         if self.grabber.is_streaming:
             self.grabber.stream_stop()
         
-        if self.grabber.is_device_open:
-            del(self.grabber)
-            del(self.sink)
-            if self.device_property_map is not None:
-                del(self.device_property_map)
+        
+        del(self.grabber)
+        del(self.sink)
+        if self.device_property_map is not None:
+            del(self.device_property_map)
     
 
     def onCloseDevice(self):
