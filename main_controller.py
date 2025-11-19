@@ -124,7 +124,7 @@ class MainController(QObject):
         for i, wavelen in enumerate(self.wavelens):
             self.laser.set_wavelen(wavelen)
             # Auto exposure
-            self.auto_expose(2)
+            self.auto_expose()
             # Take next action
             self.action(actions)
         
@@ -145,7 +145,7 @@ class MainController(QObject):
             self.pump.wait_till_ready()
 
             # Auto adjust exposure
-            self.auto_expose(10)
+            self.auto_expose()
             self.action(actions)
             self.store_medium_data()
 
@@ -574,17 +574,11 @@ class MainController(QObject):
         self.subtract_background = False
         self.background = None
     
-    def auto_expose(self, seconds=2.):
+    def auto_expose(self):
         self.camera.new_frame.connect(self.expose, Qt.ConnectionType.SingleShotConnection)
-        pass
-        # self.camera.set_autoexposure('Continuous')
-        # time.sleep(seconds)
-        # self.camera.set_autoexposure('Off')
     
     def expose(self, image: np.ndarray):
-        print(np.max(image))
-    
-    def auto_expose_non_blocking(self, seconds=2.):
-        self.camera.set_autoexposure('Continuous')
-        QTimer.singleShot(seconds*1000, lambda: self.camera.set_autoexposure('Off'))
+        exp = np.average(image)
+        setpoint = 30000
+        self.camera.set_exposure(np.clip(self.camera.get_exposure()*setpoint/exp, 0, 1_000_000))
         

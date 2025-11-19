@@ -39,6 +39,8 @@ class MainWindow(QMainWindow):
 
         self.controller = controller
 
+        self.closing = False
+
 
         # UI elements
         self.laser_window = LaserWindow(self)
@@ -170,7 +172,7 @@ class MainWindow(QMainWindow):
         self.laser_sweep_act.triggered.connect(self.controller.laser_sweep)
 
         self.auto_expose_act = add_action(QAction('Auto Expose'))
-        self.auto_expose_act.triggered.connect(lambda: self.controller.auto_expose_non_blocking())
+        self.auto_expose_act.triggered.connect(self.controller.auto_expose)
 
         self.defocus_sweep_act = add_action(QAction('Defocus Sweep'))
         self.defocus_sweep_act.setStatusTip('Perform a focus sweep')
@@ -297,6 +299,7 @@ class MainWindow(QMainWindow):
         self.controller.camera.label_update.connect(self.camera_label.setText)
     
     def closeEvent(self, event):
+        self.closing = True
         self.controller.cleanup()
         super().closeEvent(event)
     
@@ -311,79 +314,80 @@ class MainWindow(QMainWindow):
 
 
     def update_controls(self):
-        # Depending booleans
-        acquiring = self.controller.acquiring
-        pump_open = self.controller.pump.open
-        laser_open = self.controller.laser.open
-        streaming = self.controller.camera.grabber.is_streaming
-        valid_camera  = self.controller.camera.grabber.is_device_valid
-        camera_open = self.controller.camera.grabber.is_device_open
+        if not self.closing:
+            # Depending booleans
+            acquiring = self.controller.acquiring
+            pump_open = self.controller.pump.open
+            laser_open = self.controller.laser.open
+            streaming = self.controller.camera.grabber.is_streaming
+            valid_camera  = self.controller.camera.grabber.is_device_valid
+            camera_open = self.controller.camera.grabber.is_device_open
 
 
-        self.laser_parameters_act.setEnabled(self.controller.laser.open)
-        self.pump_act.setEnabled(self.controller.pump.open)
+            self.laser_parameters_act.setEnabled(self.controller.laser.open)
+            self.pump_act.setEnabled(self.controller.pump.open)
 
-        if not camera_open:
-            self.statistics_label.clear()
-        
-        xy_stage_connected = self.controller.stage.open and not not self.controller.stage.xy_stage
-        z_stage_connected = self.controller.stage.open and not not self.controller.stage.z_stage
-
-
-        # Non-acquisition
-        if not acquiring:
-            for act in self.acts:
-                act.setEnabled(True)
-
-        
-        # Devices
-        self.grab_release_laser_act.setChecked(laser_open)
-        self.laser_parameters_act.setEnabled(laser_open)
-        if not laser_open:
-            self.laser_window.setVisible(False)
-        self.pump_act.setEnabled(laser_open)
-        if not pump_open:
-            self.pump_window.setVisible(False)
-
-        self.grab_release_pump_act.setChecked(pump_open)
-        self.clean_pump_act.setEnabled(pump_open)
-
-        self.device_properties_act.setEnabled(valid_camera)
-        self.device_driver_properties_act.setEnabled(valid_camera)
-        self.start_live_act.setEnabled(valid_camera)
-        self.start_live_act.setChecked(streaming)
-        self.video_act.setEnabled(streaming)
-        self.close_device_act.setEnabled(camera_open)
-
-        # Captures
-        self.snap_background_act.setEnabled(streaming and xy_stage_connected)
-        self.snap_processed_photo_act.setEnabled(streaming and xy_stage_connected)
-        self.snap_raw_photo_act.setEnabled(streaming)
-
-        self.laser_sweep_act.setEnabled(streaming and laser_open)
-        self.media_act.setEnabled(streaming and pump_open)
-        self.defocus_sweep_act.setEnabled(streaming and z_stage_connected and xy_stage_connected)
-        self.z_wavelen_sweep_act.setEnabled(streaming and z_stage_connected and xy_stage_connected and laser_open)
-
-        # Video view functions
-        self.set_roi_act.setEnabled(valid_camera and not self.video_view.background.rect().isEmpty())
-        self.move_act.setEnabled(streaming and xy_stage_connected)
-        self.move_act.setChecked(self.video_view.mode == 'move')
-        self.set_roi_act.setChecked(self.video_view.mode == 'roi')
-
-        self.subtract_background_act.setEnabled(self.background is not None)
-        self.subtract_background_act.setChecked(self.subtract_background)
-        
-        # Acquisition
-        if acquiring:
-            self.video_view.mode = 'navigation'
-            self.subtract_background = False
-            self.subtract_background_act.setChecked(False)
+            if not camera_open:
+                self.statistics_label.clear()
             
-            for act in self.acts:
-                act.setEnabled(False)
-        
-        self.cancel_acquisition_act.setEnabled(acquiring)
+            xy_stage_connected = self.controller.stage.open and not not self.controller.stage.xy_stage
+            z_stage_connected = self.controller.stage.open and not not self.controller.stage.z_stage
+
+
+            # Non-acquisition
+            if not acquiring:
+                for act in self.acts:
+                    act.setEnabled(True)
+
+            
+            # Devices
+            self.grab_release_laser_act.setChecked(laser_open)
+            self.laser_parameters_act.setEnabled(laser_open)
+            if not laser_open:
+                self.laser_window.setVisible(False)
+            self.pump_act.setEnabled(laser_open)
+            if not pump_open:
+                self.pump_window.setVisible(False)
+
+            self.grab_release_pump_act.setChecked(pump_open)
+            self.clean_pump_act.setEnabled(pump_open)
+
+            self.device_properties_act.setEnabled(valid_camera)
+            self.device_driver_properties_act.setEnabled(valid_camera)
+            self.start_live_act.setEnabled(valid_camera)
+            self.start_live_act.setChecked(streaming)
+            self.video_act.setEnabled(streaming)
+            self.close_device_act.setEnabled(camera_open)
+
+            # Captures
+            self.snap_background_act.setEnabled(streaming and xy_stage_connected)
+            self.snap_processed_photo_act.setEnabled(streaming and xy_stage_connected)
+            self.snap_raw_photo_act.setEnabled(streaming)
+
+            self.laser_sweep_act.setEnabled(streaming and laser_open)
+            self.media_act.setEnabled(streaming and pump_open)
+            self.defocus_sweep_act.setEnabled(streaming and z_stage_connected and xy_stage_connected)
+            self.z_wavelen_sweep_act.setEnabled(streaming and z_stage_connected and xy_stage_connected and laser_open)
+
+            # Video view functions
+            self.set_roi_act.setEnabled(valid_camera and not self.video_view.background.rect().isEmpty())
+            self.move_act.setEnabled(streaming and xy_stage_connected)
+            self.move_act.setChecked(self.video_view.mode == 'move')
+            self.set_roi_act.setChecked(self.video_view.mode == 'roi')
+
+            self.subtract_background_act.setEnabled(self.background is not None)
+            self.subtract_background_act.setChecked(self.subtract_background)
+            
+            # Acquisition
+            if acquiring:
+                self.video_view.mode = 'navigation'
+                self.subtract_background = False
+                self.subtract_background_act.setChecked(False)
+                
+                for act in self.acts:
+                    act.setEnabled(False)
+            
+            self.cancel_acquisition_act.setEnabled(acquiring)
     
     
 

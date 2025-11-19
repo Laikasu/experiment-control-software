@@ -203,6 +203,12 @@ class CameraController(QObject):
     def get_exposure_time(self):
         return int(self.device_property_map.get_value_float(ic4.PropId.EXPOSURE_TIME))
     
+    def get_exposure(self):
+        return self.device_property_map.get_value_float(ic4.PropId.EXPOSURE_TIME)
+    
+    def set_exposure(self, time: float):
+        return self.device_property_map.set_value(ic4.PropId.EXPOSURE_TIME, time)
+    
     def get_fps(self):
         return self.device_property_map.get_value_float(ic4.PropId.ACQUISITION_FRAME_RATE)
     
