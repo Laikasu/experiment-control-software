@@ -4,6 +4,7 @@ import imagingcontrol4 as ic4
 
 import sys
 import traceback
+import logging
 
 from main_window import MainWindow
 from main_controller import MainController
@@ -19,6 +20,25 @@ def excepthook(exc_type, exc_value, exc_traceback):
     msg.exec()
 
 sys.excepthook = excepthook
+
+class QtMessageBoxHandler(logging.Handler):
+    def __init__(self, level=logging.WARNING):
+        super().__init__(level)
+
+    def emit(self, record):
+        msg = self.format(record)
+        mb = QMessageBox()
+        mb.setIcon(QMessageBox.Icon.Warning)
+        mb.setWindowTitle("Warning")
+        mb.setText(msg)
+        mb.exec()
+
+handler = QtMessageBoxHandler()
+handler.setFormatter(logging.Formatter('%(message)s'))
+
+logger = logging.getLogger()
+logger.addHandler(handler)
+logger.setLevel(logging.DEBUG)
 
 def main():
     ic4.Library.init()

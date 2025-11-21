@@ -103,11 +103,11 @@ class MainWindow(QMainWindow):
         self.device_select_act = add_action(QAction(QIcon(application_path + 'images/camera.png'), '&Select', self))
         self.device_select_act.setStatusTip('Select a video capture device')
         self.device_select_act.setShortcut(QKeySequence.StandardKey.Open)
-        self.device_select_act.triggered.connect(self.controller.camera.onSelectDevice)
+        self.device_select_act.triggered.connect(lambda: self.controller.camera.onSelectDevice(parent=self))
 
         self.device_properties_act = add_action(QAction(QIcon(application_path + 'images/imgset.png'), '&Camera Properties', self))
         self.device_properties_act.setStatusTip('Show device property dialog')
-        self.device_properties_act.triggered.connect(self.controller.camera.onDeviceProperties)
+        self.device_properties_act.triggered.connect(lambda:self.controller.camera.onDeviceProperties(parent=self))
 
 
         self.device_driver_properties_act = add_action(QAction('&Driver Properties', self))

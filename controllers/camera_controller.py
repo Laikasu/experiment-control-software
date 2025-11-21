@@ -87,17 +87,17 @@ class CameraController(QObject):
             pass
 
     
-    def onSelectDevice(self):
-        dlg = ic4.pyside6.DeviceSelectionDialog(self.grabber)
+    def onSelectDevice(self, parent=None):
+        dlg = ic4.pyside6.DeviceSelectionDialog(self.grabber, parent=parent)
         if dlg.exec() == 1:
             if not self.property_dialog is None:
                 self.property_dialog.update_grabber(self.grabber)
             
             self.onDeviceOpened()
     
-    def onDeviceProperties(self):
+    def onDeviceProperties(self, parent=None):
         if self.property_dialog is None:
-            self.property_dialog = ic4.pyside6.PropertyDialog(self.grabber, title='Device Properties')
+            self.property_dialog = ic4.pyside6.PropertyDialog(self.grabber, parent=parent, title='Device Properties')
             # set default vis
         
         self.property_dialog.show()

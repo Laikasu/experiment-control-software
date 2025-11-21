@@ -523,6 +523,7 @@ class MainController(QObject):
         time.sleep(seconds)
         self.camera.set_autoexposure('Off')
     
-    def auto_expose_non_blocking(self, seconds=2.):
+    def auto_expose_non_blocking(self):
         self.camera.set_autoexposure('Continuous')
-        QTimer.singleShot(int(seconds*1000), lambda: self.camera.set_autoexposure('Off'))
+        QTimer.singleShot(int(2*1000), lambda: self.camera.set_autoexposure('Off'))
+    
