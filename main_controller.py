@@ -323,6 +323,8 @@ class MainController(QObject):
             with open(filepath+'.yaml', 'w') as file:
                 yaml.dump(metadata, file)
         self.data_directory = dialog.directory()
+        self.wavelens = np.array([])
+        self.z_positions = np.array([])
 
 
     # Snap and save one raw image
@@ -398,6 +400,7 @@ class MainController(QObject):
             with open(filepath+'.yaml', 'w') as file:
                 yaml.dump(metadata, file)
         self.data_directory = dialog.directory()
+        self.wavelens = np.array([])
     
 
     def z_sweep(self, start, stop, num):
@@ -425,6 +428,7 @@ class MainController(QObject):
             with open(filepath +'.yaml', 'w') as file:
                 yaml.dump(metadata, file)
         self.data_directory = dialog.directory()
+        self.z_positions = np.array([])
 
     def generate_metadata(self) -> dict:
         exposure_auto = self.camera.get_exposure_auto()

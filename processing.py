@@ -1,7 +1,7 @@
 import numpy as np
 
 def background_subtracted(data, background):
-    diff = np.divide(np.subtract(data, background, dtype=np.int32), background, dtype=np.float64)
+    diff = np.divide(np.subtract(data, background, dtype=np.float64), background, dtype=np.float64)
     return diff
 
 def float_to_mono(data):
