@@ -264,8 +264,6 @@ class MainController(QObject):
         self.acquiring = False
         self.acquiring_mutex.unlock()
         self.media = []
-        self.z_positions = np.array([])
-        self.wavelens = np.array([])
         self.update_controls.emit()
     
 
