@@ -70,6 +70,10 @@ class MainController(QObject):
 
         self.got_image_mutex = QMutex()
         self.got_image = QWaitCondition()
+
+        self.exposed_mutex = QMutex()
+        self.exposed = QWaitCondition()
+
         self.acquiring = False
         self.acquiring_mutex = QMutex()
 
@@ -522,11 +526,25 @@ class MainController(QObject):
         # Set ROI in camera
         self.camera.set_roi(roi)
     
-    def auto_expose(self, seconds=2.):
-        self.camera.set_autoexposure('Continuous')
-        time.sleep(seconds)
-        self.camera.set_autoexposure('Off')
+    def auto_expose(self):
+        self.camera.new_frame.connect(self.expose, Qt.ConnectionType.SingleShotConnection)
+        self.exposed_mutex.lock()
+        self.exposed.wait(self.got_image_mutex, 4000)
+        self.exposed_mutex.unlock()
+        
     
+    def expose(self, frame: np.ndarray):
+        exposure = np.percentile(frame, 99)
+        if exposure > 60000:
+            self.camera.set_autoexposure('Continuous')
+            time.sleep(2)
+            self.camera.set_autoexposure('Off')
+        else:
+            self.camera.set_exposure(self.camera.get_exposure()*50000/exposure)
+            time.sleep(0.2)
+        self.exposed.wakeAll()
+
+
     def auto_expose_non_blocking(self):
         self.camera.set_autoexposure('Continuous')
         QTimer.singleShot(int(2*1000), lambda: self.camera.set_autoexposure('Off'))
