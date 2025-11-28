@@ -293,8 +293,15 @@ class MainController(QObject):
         if 'wavelen' in params.keys():
             if not self.laser.open:
                 raise RuntimeError('Laser is not open, cannot sweep media')
-            self.shape.append(params['wavelen'][2])
-            self.wavelens = np.linspace(*params['wavelen'])
+            
+            start, stop, num = params['wavelen']
+            self.shape.append(num)
+
+            # Sweep from long to short bc laser is more powerful with long
+            # This helps with auto exposure bc overexposure is unlikely this way
+            minimum = min(start, stop)
+            maximum = max(start, stop)
+            self.wavelens = np.linspace(maximum, minimum, num)
             actions.append(self.take_laser_sweep)
         
         
@@ -383,7 +390,9 @@ class MainController(QObject):
 
 
     def laser_sweep(self, start, stop, num):
-        self.wavelens = np.linspace(start, stop, num)
+        minimum = min(start, stop)
+        maximum = max(start, stop)
+        self.wavelens = np.linspace(maximum, minimum, num)
         self.start_acquisition(self.save_laser_data, self.take_laser_sweep, self.take_sequence_avg)
     
     def save_laser_data(self):
@@ -444,6 +453,7 @@ class MainController(QObject):
             exposure_time = self.camera.get_exposure_time()
         
         if len(self.wavelens) > 0:
+            exposure_time = 'auto'
             wavelen = {
                 'Start': int(self.wavelens[0]),
                 'Stop': int(self.wavelens[-1]),
