@@ -151,9 +151,9 @@ class MainController(QObject):
 
         self.pump.wait_till_ready()
         for medium in input:
-            self.pump.pickup(medium, 40)
+            self.pump.pickup(medium, 60)
             self.pump.wait_till_ready()
-            self.pump.dispense(self.pump.flowcell, 40)
+            self.pump.dispense(self.pump.flowcell, 60)
             self.pump.wait_till_ready()
 
             # Auto adjust exposure
@@ -165,7 +165,7 @@ class MainController(QObject):
         data = np.squeeze(self.photos)
         shape = np.shape(data)
         images = data.reshape(*self.shape, self.shot_count+3, *shape[1:])
-        folder = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.TempLocation)
+        folder = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.PicturesLocation)
         filepath = Path(folder) / datetime.now().strftime("%Y%m%d_%H%M%S.npy")
         np.save(filepath, images)
         self.photos = []
@@ -297,9 +297,7 @@ class MainController(QObject):
 
             # Sweep from long to short bc laser is more powerful with long
             # This helps with auto exposure bc overexposure is unlikely this way
-            minimum = min(start, stop)
-            maximum = max(start, stop)
-            self.wavelens = np.linspace(maximum, minimum, num)
+            self.wavelens = np.linspace(start, stop, num)
             actions.append(self.take_laser_sweep)
         
         
@@ -388,9 +386,7 @@ class MainController(QObject):
 
 
     def laser_sweep(self, start, stop, num):
-        minimum = min(start, stop)
-        maximum = max(start, stop)
-        self.wavelens = np.linspace(maximum, minimum, num)
+        self.wavelens = np.linspace(start, stop, num)
         self.start_acquisition(self.save_laser_data, self.take_laser_sweep, self.take_sequence_avg)
     
     def save_laser_data(self):
@@ -537,20 +533,25 @@ class MainController(QObject):
         self.camera.set_roi(roi)
 
     def set_exposure(self, frame: np.ndarray):
-        self.exposure = np.percentile(frame, 99)
+        self.exposure = np.max(frame)
     
     def auto_expose(self):
         if self.exposure > 55000:
             self.camera.set_autoexposure('Continuous')
             time.sleep(2)
             self.camera.set_autoexposure('Off')
-        else:
-            self.camera.set_exposure(self.camera.get_exposure()*50000/self.exposure)
+        
+        self.camera.set_exposure(self.camera.get_exposure()*50000/self.exposure)
+
+    def end_auto_expose(self):
+        self.camera.set_autoexposure('Off')
+        self.camera.set_exposure(self.camera.get_exposure()*50000/self.exposure)
 
     def auto_expose_non_blocking(self):
         if self.exposure > 55000:
             self.camera.set_autoexposure('Continuous')
-            QTimer.singleShot(int(2*1000), lambda: self.camera.set_autoexposure('Off'))
+            QTimer.singleShot(int(2*1000), self.end_auto_expose)
         else:
             self.camera.set_exposure(self.camera.get_exposure()*50000/self.exposure)
+            
     

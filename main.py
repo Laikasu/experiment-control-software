@@ -23,7 +23,7 @@ sys.excepthook = excepthook
 
 class QtMessageBoxHandler(logging.Handler):
     def __init__(self, level=logging.WARNING):
-        super().__init__(level)
+        super().__init__()
 
     def emit(self, record):
         msg = self.format(record)
@@ -33,12 +33,18 @@ class QtMessageBoxHandler(logging.Handler):
         mb.setText(msg)
         mb.exec()
 
+# Console logging
+logging.basicConfig(level=logging.DEBUG)
+
+# Popup handler
 handler = QtMessageBoxHandler()
+handler.setLevel(logging.WARNING)
 handler.setFormatter(logging.Formatter('%(message)s'))
 
 logger = logging.getLogger()
 logger.addHandler(handler)
-logger.setLevel(logging.DEBUG)
+
+
 
 def main():
     ic4.Library.init()
