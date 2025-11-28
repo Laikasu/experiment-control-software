@@ -55,7 +55,10 @@ class MainController(QObject):
         self.pump = PumpController(self)
         self.laser = LaserController(self)
         self.camera = CameraController(self)
+        self.camera.new_frame.connect(self.set_exposure)
 
+        # 99th percentile of exposure
+        self.exposure = 0
         # Routes
         self.pump.changedState.connect(self.update_controls)
         self.laser.changedState.connect(self.update_controls)
@@ -70,9 +73,6 @@ class MainController(QObject):
 
         self.got_image_mutex = QMutex()
         self.got_image = QWaitCondition()
-
-        self.exposed_mutex = QMutex()
-        self.exposed = QWaitCondition()
 
         self.acquiring = False
         self.acquiring_mutex = QMutex()
@@ -133,8 +133,10 @@ class MainController(QObject):
         self.laser_data_raw = []
         for i, wavelen in enumerate(self.wavelens):
             self.laser.set_wavelen(wavelen)
+            time.sleep(0.2)
             # Auto exposure
             self.auto_expose()
+            time.sleep(0.2)
             # Take next action
             self.action(actions)
         
@@ -525,27 +527,22 @@ class MainController(QObject):
     def update_roi(self, roi):
         # Set ROI in camera
         self.camera.set_roi(roi)
+
+    def set_exposure(self, frame: np.ndarray):
+        self.exposure = np.percentile(frame, 99)
     
     def auto_expose(self):
-        self.camera.new_frame.connect(self.expose, Qt.ConnectionType.SingleShotConnection)
-        self.exposed_mutex.lock()
-        self.exposed.wait(self.got_image_mutex, 4000)
-        self.exposed_mutex.unlock()
-        
-    
-    def expose(self, frame: np.ndarray):
-        exposure = np.percentile(frame, 99)
-        if exposure > 60000:
+        if self.exposure > 55000:
             self.camera.set_autoexposure('Continuous')
             time.sleep(2)
             self.camera.set_autoexposure('Off')
         else:
-            self.camera.set_exposure(self.camera.get_exposure()*50000/exposure)
-            time.sleep(0.2)
-        self.exposed.wakeAll()
-
+            self.camera.set_exposure(self.camera.get_exposure()*50000/self.exposure)
 
     def auto_expose_non_blocking(self):
-        self.camera.set_autoexposure('Continuous')
-        QTimer.singleShot(int(2*1000), lambda: self.camera.set_autoexposure('Off'))
+        if self.exposure > 55000:
+            self.camera.set_autoexposure('Continuous')
+            QTimer.singleShot(int(2*1000), lambda: self.camera.set_autoexposure('Off'))
+        else:
+            self.camera.set_exposure(self.camera.get_exposure()*50000/self.exposure)
     
