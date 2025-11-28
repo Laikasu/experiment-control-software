@@ -76,4 +76,4 @@ class PumpWindow(QDockWidget):
         ports.discard(1)
         ports.discard(7)
         ports.discard(0)
-        self.start_clean.emit(ports)
+        self.start_clean.emit(list(ports))

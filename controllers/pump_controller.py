@@ -96,11 +96,13 @@ class PumpController(QObject):
     
     @requires_open
     def clean_pump(self, ports, volume=200):
+        print(ports)
         if self.waste not in ports and self.flowcell not in ports:
             self.amf.pullAndWait()
             self.amf.setFlowRate(1500,2)
             for i in range(5):
                 for output in ports:
+                    print(output)
                     self.amf.valveMove(self.water)
                     self.amf.pumpPickupVolume(volume)
                     self.amf.valveMove(output)

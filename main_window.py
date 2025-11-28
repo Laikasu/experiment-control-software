@@ -183,9 +183,6 @@ class MainWindow(QMainWindow):
         self.cancel_acquisition_act = add_action(QAction('Cancel acquisition'))
         self.cancel_acquisition_act.triggered.connect(self.controller.finish_acquisition)
 
-        self.clean_pump_act = add_action(QAction('Clean pump'))
-        self.clean_pump_act.triggered.connect(self.controller.pump.clean_pump)
-
 
 
         exit_act = add_action(QAction('E&xit', self))
@@ -214,7 +211,6 @@ class MainWindow(QMainWindow):
         device_menu.addAction(self.grab_release_pump_act)
         device_menu.addAction(self.close_device_act)
         device_menu.addAction(self.change_setup_act)
-        device_menu.addAction(self.clean_pump_act)
 
         view_menu = self.menuBar().addMenu('&View')
         view_menu.addAction(self.show_acquisition_act)
@@ -329,7 +325,6 @@ class MainWindow(QMainWindow):
             #self.sweep_window.laser_group.
 
             self.grab_release_pump_act.setChecked(pump_open)
-            self.clean_pump_act.setEnabled(pump_open)
 
             self.device_properties_act.setEnabled(valid_camera)
             self.device_driver_properties_act.setEnabled(valid_camera)
